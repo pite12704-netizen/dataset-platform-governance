@@ -3,6 +3,7 @@
 面向图像训练数据生产的治理平台：**批量接入 → 检查与去重 → 视觉预标注 → 人工独立复核 → 版本发布 → 授权交付**。
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+[![CI](https://github.com/pite12704-netizen/image-dataset-governance/actions/workflows/ci.yml/badge.svg)](https://github.com/pite12704-netizen/image-dataset-governance/actions/workflows/ci.yml)
 
 采用 FastAPI、MySQL、Redis/Celery、S3 兼容存储及 React/TypeScript。Agent 通过受控业务接口帮助诊断流程、预览识别/去重计划，人工确认后创建任务。项目定位为可运行、可学习的工程实现，不代表已通过企业生产容量或模型准确率认证。
 

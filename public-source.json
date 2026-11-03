@@ -57,8 +57,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "5992ee3231328a21ea0cfd6b32b867b41fa70eb1de547ccebb23ba1eec246340",
-      "bytes": 4799
+      "sha256": "88d5ff24cba2d53740961007b4160418c638c826d9a65e6021c473733ba7b837",
+      "bytes": 4993
     },
     {
       "path": "SECURITY.md",
@@ -492,13 +492,13 @@
     },
     {
       "path": "backend/requirements.lock",
-      "sha256": "1a1b4bf58342c71e50dc313a05904f05e13a028ea5e4359e8b350e2d0ab6ee1b",
+      "sha256": "e7ac50f947b4c291282faed60fa7815ea1832cfabc013789666f211396543858",
       "bytes": 105207
     },
     {
       "path": "backend/requirements.txt",
-      "sha256": "337bba3fdbf5962be1da7c170409f6b922c4b4bad0a4924dce88d9af59eb926b",
-      "bytes": 540
+      "sha256": "0bd7ec09a6e7679faea3fc8f3d384fce01c0a451912bffa500d2d44940159d41",
+      "bytes": 559
     },
     {
       "path": "backend/tests/conftest.py",
