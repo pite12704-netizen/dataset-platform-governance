@@ -17,7 +17,7 @@ pyotp>=2.9,<3
 cryptography>=50,<51
 pillow>=13,<14
 pandas>=2.2,<4
-pytest>=8.3,<10
+pytest>=9.2.0,<10
 ruff>=0.9,<1
 
 # Security floors for shared TLS roots and artifact locking.
