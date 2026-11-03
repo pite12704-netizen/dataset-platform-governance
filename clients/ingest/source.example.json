@@ -1,0 +1,18 @@
+{
+  "source_id": "customer-a",
+  "source": "客户提供的来源说明",
+  "license": "填写经确认的数据使用许可",
+  "database": {
+    "url_env": "CUSTOMER_DATABASE_URL",
+    "table": "images",
+    "columns": {"id": "id", "url": "image_url", "revision": "updated_at", "group": "source_group"}
+  },
+  "storage": {
+    "endpoint_env": "CUSTOMER_S3_ENDPOINT",
+    "access_key_env": "CUSTOMER_S3_ACCESS_KEY",
+    "secret_key_env": "CUSTOMER_S3_SECRET_KEY",
+    "bucket": "images",
+    "url_prefix": "https://storage.customer.example/images/",
+    "allow_http": false
+  }
+}

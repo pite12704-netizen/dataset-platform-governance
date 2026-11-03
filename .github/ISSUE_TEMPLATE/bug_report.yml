@@ -1,0 +1,17 @@
+name: Bug report
+description: Report a reproducible problem using synthetic data
+body:
+  - type: markdown
+    attributes:
+      value: Do not include passwords, tokens, real datasets, signed URLs or raw logs. Use SECURITY.md for vulnerabilities.
+  - type: input
+    id: revision
+    attributes: {label: Revision and environment, description: Commit/tag, OS and local sandbox or isolated service setup}
+    validations: {required: true}
+  - type: textarea
+    id: reproduce
+    attributes: {label: Minimal reproduction, description: Steps using synthetic inputs and expected/actual behavior}
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes: {label: Redacted evidence, description: Safe request ID, status and sanitized screenshot; no headers or secrets}

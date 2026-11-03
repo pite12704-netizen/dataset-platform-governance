@@ -1,0 +1,15 @@
+# smtp_password 文件存在时，enterprise.ps1 自动加载此覆盖；不创建或提交真实授权码。
+services:
+  api:
+    secrets: [smtp_password]
+  worker:
+    secrets: [smtp_password]
+  vision-worker:
+    secrets: [smtp_password]
+  beat:
+    secrets: [smtp_password]
+  migrate:
+    secrets: [smtp_password]
+secrets:
+  smtp_password:
+    file: ./secrets/smtp_password

@@ -1,0 +1,23 @@
+groups:
+  - name: dataset-platform
+    rules:
+      - alert: PlatformApiErrorRate
+        expr: sum(rate(platform_http_requests_total{status="5xx"}[5m])) / clamp_min(sum(rate(platform_http_requests_total[5m])), 0.001) > 0.01
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "API 5xx 比例超过 1%" }
+      - alert: PlatformQueueStalled
+        expr: max(platform_queue_oldest_seconds) > 300
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "任务排队超过五分钟" }
+      - alert: PlatformWorkerMissing
+        expr: platform_worker_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Worker 或 Beat 心跳丢失" }
+      - alert: PlatformApiP95Slow
+        expr: histogram_quantile(0.95, sum by (le) (rate(platform_http_duration_seconds_bucket[5m]))) > 2
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "API P95 超过两秒" }

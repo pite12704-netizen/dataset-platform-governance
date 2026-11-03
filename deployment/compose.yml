@@ -1,0 +1,163 @@
+name: dataset-platform
+x-app: &app
+  image: ${DP_APP_IMAGE:-dataset-platform-api:enterprise}
+  build:
+    context: ..
+    dockerfile: deployment/Dockerfile.api
+  env_file: ${DP_SERVICE_ENV:-./service.env.example}
+  restart: unless-stopped
+  init: true
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  read_only: true
+  mem_limit: ${DP_APP_MEMORY_LIMIT:-2g}
+  cpus: ${DP_APP_CPU_LIMIT:-2.0}
+  pids_limit: 256
+  tmpfs: ['/tmp:size=2g,mode=1777']
+  volumes: [mail:/app/var/mail]
+  secrets: [app_key, session_signing_key, mfa_encryption_keys, database_url, s3_access_key, s3_secret_key, redis_url]
+  depends_on:
+    mysql: {condition: service_healthy}
+    redis: {condition: service_healthy}
+    storage-init: {condition: service_completed_successfully}
+    migrate: {condition: service_completed_successfully}
+
+services:
+  mysql:
+    mem_limit: ${DP_MYSQL_MEMORY_LIMIT:-2g}
+    cpus: ${DP_MYSQL_CPU_LIMIT:-2.0}
+    image: ${MYSQL_IMAGE:?Set a verified MySQL 8.4 image digest}
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: dataset_platform
+      MYSQL_USER: dp_app
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    secrets: [mysql_password, mysql_root_password]
+    volumes: [mysql:/var/lib/mysql]
+    command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_0900_ai_ci, --max-connections=200,
+      '--binlog-row-image=${DP_MYSQL_BINLOG_ROW_IMAGE:-FULL}',
+      '--binlog-expire-logs-seconds=${DP_MYSQL_BINLOG_EXPIRE_SECONDS:-2592000}']
+    healthcheck:
+      test: [CMD-SHELL, 'MYSQL_PWD="$$(cat /run/secrets/mysql_password)" mysql --protocol=TCP -u dp_app dataset_platform -e "SELECT 1" >/dev/null']
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    logging: &logs {driver: json-file, options: {max-size: 10m, max-file: "5"}}
+  minio:
+    mem_limit: ${DP_STORAGE_MEMORY_LIMIT:-2g}
+    cpus: ${DP_STORAGE_CPU_LIMIT:-2.0}
+    image: ${MINIO_IMAGE:?Set a verified and supported MinIO image}
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_root_user
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    secrets: [minio_root_user, minio_root_password]
+    command: [server, /data, --console-address, ':9001']
+    volumes: [objects:/data]
+    logging: *logs
+  storage-init:
+    image: ${MC_IMAGE:?Set a verified MinIO client image}
+    restart: on-failure
+    environment: {DP_S3_BUCKET: datasets}
+    entrypoint: [/bin/sh, /bootstrap/storage-init.sh]
+    secrets: [minio_root_user, minio_root_password, s3_access_key, s3_secret_key]
+    volumes: [./storage-init.sh:/bootstrap/storage-init.sh:ro, ./bucket-policy.json:/bootstrap/bucket-policy.json:ro]
+    depends_on: [minio]
+  redis:
+    mem_limit: ${DP_REDIS_MEMORY_LIMIT:-512m}
+    cpus: ${DP_REDIS_CPU_LIMIT:-1.0}
+    image: ${REDIS_IMAGE:?Set a verified Redis image digest}
+    restart: unless-stopped
+    entrypoint: [/bin/sh, -c]
+    command: ['exec redis-server --appendonly yes --maxmemory 384mb --maxmemory-policy noeviction --requirepass "$$(cat /run/secrets/redis_password)"']
+    secrets: [redis_password]
+    volumes: [redis:/data]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping | grep PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  clamav:
+    mem_limit: ${DP_SCANNER_MEMORY_LIMIT:-2g}
+    cpus: ${DP_SCANNER_CPU_LIMIT:-2.0}
+    image: ${DP_SCAN_IMAGE:-dataset-platform-scanner:enterprise}
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile.clamav
+      args: {CLAMAV_IMAGE: '${CLAMAV_IMAGE:?Set a verified ClamAV image digest}'}
+    restart: unless-stopped
+    volumes: [clamav:/var/lib/clamav]
+    logging: *logs
+  migrate:
+    <<: *app
+    restart: 'no'
+    command: [alembic, -c, backend/alembic.ini, upgrade, head]
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      storage-init: {condition: service_completed_successfully}
+  api:
+    <<: *app
+    command: [uvicorn, 'app.main:create_app', --factory, --host, 0.0.0.0, --port, '8000', --workers, '2', --limit-concurrency, '64', --no-access-log, --proxy-headers, --forwarded-allow-ips, '*']
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health/ready", timeout=5)']
+      interval: 10s
+      timeout: 6s
+      retries: 20
+    logging: *logs
+  worker:
+    <<: *app
+    command: [celery, -A, app.worker:app, worker, --queues=celery, --hostname=basic@%h, --loglevel=INFO, --concurrency=2, --max-tasks-per-child=100]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      clamav: {condition: service_started}
+    logging: *logs
+  vision-worker:
+    <<: *app
+    environment: {DP_WORKER_ROLE: vision}
+    command: [celery, -A, app.worker:app, worker, --queues=platform.vision, --hostname=vision@%h, --loglevel=INFO, --concurrency=1, --max-tasks-per-child=50]
+    logging: *logs
+  mail-worker:
+    <<: *app
+    mem_limit: ${DP_MAIL_MEMORY_LIMIT:-512m}
+    environment: {DP_WORKER_ROLE: mail}
+    command: [celery, -A, app.worker:app, worker, --queues=platform.mail, --hostname=mail@%h, --loglevel=INFO, --concurrency=1, --max-tasks-per-child=100]
+    logging: *logs
+  beat:
+    <<: *app
+    mem_limit: ${DP_BEAT_MEMORY_LIMIT:-512m}
+    command: [celery, -A, app.worker:app, beat, --loglevel=INFO, --schedule=/tmp/celerybeat-schedule]
+    logging: *logs
+  web:
+    image: ${DP_WEB_IMAGE:-dataset-platform-web:enterprise}
+    build: {context: .., dockerfile: deployment/Dockerfile.web}
+    restart: unless-stopped
+    environment: {DP_SITE_ADDRESS: '${DP_SITE_ADDRESS:-localhost}'}
+    ports: ['${DP_WEB_BIND:-127.0.0.1}:${DP_HTTPS_PORT:-8443}:443']
+    volumes: [caddy_data:/data, caddy_config:/config]
+    depends_on: [api]
+    logging: *logs
+
+volumes:
+  mysql:
+  objects:
+  redis:
+  clamav:
+  mail:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  app_key: {file: ./secrets/app_key}
+  session_signing_key: {file: ./secrets/session_signing_key}
+  mfa_encryption_keys: {file: ./secrets/mfa_encryption_keys}
+  database_url: {file: ./secrets/database_url}
+  mysql_password: {file: ./secrets/mysql_password}
+  mysql_root_password: {file: ./secrets/mysql_root_password}
+  minio_root_user: {file: ./secrets/minio_root_user}
+  minio_root_password: {file: ./secrets/minio_root_password}
+  s3_access_key: {file: ./secrets/s3_access_key}
+  s3_secret_key: {file: ./secrets/s3_secret_key}
+  redis_password: {file: ./secrets/redis_password}
+  redis_url: {file: ./secrets/redis_url}

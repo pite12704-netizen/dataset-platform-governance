@@ -1,0 +1,25 @@
+# 【学习标注：外部 MySQL】可选覆盖文件；不会更改连接密钥，也不会迁移业务数据。
+# Compose >= 2.24.4。使用时放在基础 compose.yml 和桌面挂载覆盖文件之后。
+# API、视觉 Worker、Beat、迁移程序不再等待内置 mysql；普通 Worker 已依赖 migrate。
+services:
+  mysql:
+    profiles: [bundled-mysql]
+  migrate:
+    depends_on: !override
+      redis: {condition: service_healthy}
+      storage-init: {condition: service_completed_successfully}
+  api:
+    depends_on: !override
+      redis: {condition: service_healthy}
+      storage-init: {condition: service_completed_successfully}
+      migrate: {condition: service_completed_successfully}
+  vision-worker:
+    depends_on: !override
+      redis: {condition: service_healthy}
+      storage-init: {condition: service_completed_successfully}
+      migrate: {condition: service_completed_successfully}
+  beat:
+    depends_on: !override
+      redis: {condition: service_healthy}
+      storage-init: {condition: service_completed_successfully}
+      migrate: {condition: service_completed_successfully}

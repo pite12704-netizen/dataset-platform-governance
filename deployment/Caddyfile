@@ -1,0 +1,18 @@
+{$DP_SITE_ADDRESS:localhost} {
+    tls internal
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        Strict-Transport-Security "max-age=31536000"
+    }
+    @backend path /api/* /health/* /mcp* /.well-known/*
+    handle @backend {
+        reverse_proxy api:8000
+    }
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}

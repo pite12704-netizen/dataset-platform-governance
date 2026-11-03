@@ -1,0 +1,5 @@
+ARG CLAMAV_IMAGE
+FROM ${CLAMAV_IMAGE}
+# 超过大小、展开量或递归限制时明确报警，避免跳过扫描后返回 OK。
+RUN sed -i '/^StreamMaxLength /d; /^MaxFileSize /d; /^MaxScanSize /d; /^AlertExceedsMax /d' /etc/clamav/clamd.conf \
+    && printf '\nStreamMaxLength 64M\nMaxFileSize 64M\nMaxScanSize 256M\nAlertExceedsMax yes\n' >> /etc/clamav/clamd.conf
