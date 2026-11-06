@@ -13,7 +13,8 @@
     "test:previews": "node --test tests/previews.test.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test:browser": "node --test --test-concurrency=1 tests/agent-context.test.mjs tests/agent-workflow.test.mjs tests/review-template.test.mjs"
+    "test:browser": "node --test --test-concurrency=1 tests/agent-context.test.mjs tests/agent-workflow.test.mjs tests/review-template.test.mjs tests/retrieval.test.mjs",
+    "test:retrieval": "node --test tests/retrieval.test.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",

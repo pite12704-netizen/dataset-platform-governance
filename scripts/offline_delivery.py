@@ -78,6 +78,9 @@ def verify(bundle,pinned=None):
 
 
 def build(output,images,wheelhouse=None,signatures=None,reuse=None,reuse_hash=None):
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    schema_revision = ScriptDirectory.from_config(Config(str(ROOT/'backend/alembic.ini'))).get_current_head()
     # The repository audit does not stage anything and never includes local service files.
     if subprocess.run([sys.executable,str(ROOT/'scripts/audit_repository.py')],cwd=ROOT,capture_output=True).returncode:
         raise RuntimeError('Repository audit rejected offline source packaging')
@@ -98,10 +101,10 @@ def build(output,images,wheelhouse=None,signatures=None,reuse=None,reuse_hash=No
         probe="from alembic.config import Config; from alembic.script import ScriptDirectory; print(ScriptDirectory.from_config(Config('/app/backend/alembic.ini')).get_current_head())"
         try:result=subprocess.run(['docker','run','--rm','--network','none','--read-only','--tmpfs','/tmp','--entrypoint','python',roles['api'],'-c',probe],capture_output=True,text=True,timeout=30)
         except subprocess.TimeoutExpired:raise RuntimeError('Application image revision probe timed out') from None
-        if result.returncode or result.stdout.strip()!='c63f8a29d105':raise RuntimeError('Application image schema differs from offline source release')
+        if result.returncode or result.stdout.strip()!=schema_revision:raise RuntimeError('Application image schema differs from offline source release')
         api_fingerprint=verify_api_source(roles['api'],ROOT)
     output=Path(output).resolve();output.mkdir(parents=True,exist_ok=False)
-    manifest={'format':1,'schema_revision':'c63f8a29d105','host_python':f'{sys.version_info.major}.{sys.version_info.minor}',
+    manifest={'format':1,'schema_revision':schema_revision,'host_python':f'{sys.version_info.major}.{sys.version_info.minor}',
         'host_platform':sys.platform,'files':[],'images':[],'image_roles':roles,'local_service_credentials_included':False,
         'prerequisites':['Docker Linux engine and Compose','Python matching host_python','New local secrets and TLS configuration',
                          'ClamAV signatures and model weights provisioned separately; base data platform works without a model']}

@@ -8,8 +8,8 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
-test('visual draft requires preview and confirmation, then shows streamed task result',{timeout:60000},async()=>{
-  const v='a'.repeat(32),actionId='b'.repeat(32),job='c'.repeat(32);let action,confirmations=0,previews=0,streams=0;
+for(const engine of ['legacy','langgraph'])test(`visual draft requires preview and confirmation, then shows streamed task result (${engine})`,{timeout:60000},async()=>{
+  const v='a'.repeat(32),actionId='b'.repeat(32),job='c'.repeat(32);let action,confirmations=0,previews=0,streams=0,recoveries=0,reconciliations=0;
   const dist=path.resolve('dist');const server=createServer(async(req,res)=>{try{
     const route=new URL(req.url,'http://localhost').pathname;
     const send=(value,type='application/json')=>{res.writeHead(200,{'Content-Type':type});res.end(type==='application/json'?JSON.stringify(value):value);};
@@ -17,7 +17,7 @@ test('visual draft requires preview and confirmation, then shows streamed task r
       const p=route.slice(7);
       if(p==='/config')return send({deployment:'private',environment:'test'});
       if(p==='/auth/me')return send({id:'d'.repeat(32),name:'Synthetic owner'});
-      if(p==='/agent/capabilities')return send({model_enabled:false});
+      if(p==='/agent/capabilities')return send({model_enabled:false,workflow_engine:engine});
       if(p==='/datasets')return send({items:[]});
       if(p==='/versions/'+v)return send({id:v,number:1,dataset:{name:'Synthetic visual version'}});
       if(p==='/agent/conversations/'+'f'.repeat(32))return send({messages:[]});
@@ -31,10 +31,22 @@ test('visual draft requires preview and confirmation, then shows streamed task r
       if(p==='/agent/actions'&&req.method==='POST'){
         const chunks=[];for await(const x of req)chunks.push(x);const body=JSON.parse(Buffer.concat(chunks).toString());
         assert.equal(body.image_limit,2);previews++;
-        action={id:actionId,kind:'vision',status:'pending',payload:body,expires_at:'2099-01-01T00:00:00',summary:{dataset_name:'Synthetic visual version',version_number:1,license:'test',input_files:2,input_bytes:100,output:'候选标注',resource_estimate:'synthetic',workflow:{plan_hash:'9'.repeat(64),images:2,total_images:20,model:'fixture-vl',template_name:'人物服饰',attributes:['袖长','裤长','帽子'],shard_size:1,selection_method:'前N张'}}};return send(action);
+        action={id:actionId,kind:'vision',status:'pending',payload:body,expires_at:'2099-01-01T00:00:00',summary:{dataset_name:'Synthetic visual version',version_number:1,license:'test',input_files:2,input_bytes:100,output:'候选标注',resource_estimate:'synthetic',workflow:{plan_hash:'9'.repeat(64),images:2,total_images:20,model:'fixture-vl',template_name:'人物服饰',attributes:['袖长','裤长','帽子'],shard_size:1,selection_method:'前N张'}}};
+        if(engine==='langgraph')action.orchestration={engine,status:'interrupted',recoverable:true};return send(action);
       }
       if(p==='/agent/actions/'+actionId+'/confirm'){
-        confirmations++;action={...action,status:'completed',result:{job_id:job,plan_id:job,url:'/jobs'}};return send(action);
+        confirmations++;action={...action,status:'completed',result:{job_id:job,plan_id:job,url:'/jobs'}};
+        if(engine==='langgraph')action.orchestration={engine,status:'awaiting_task',recoverable:true};return send(action);
+      }
+      if(p==='/agent/actions/'+actionId+'/resume'){
+        assert.equal(engine,'langgraph');const chunks=[];for await(const x of req)chunks.push(x);const body=JSON.parse(Buffer.concat(chunks).toString());
+        if(action.status==='pending'){
+          assert.equal(body.mode,'recover');assert.equal(confirmations,0);recoveries++;
+          action.orchestration={engine,status:'awaiting_confirmation',recoverable:true};
+        }else{
+          assert.equal(body.mode,'refresh');reconciliations++;
+          action.orchestration={engine,status:'completed',recoverable:false};
+        }return send(action);
       }
       if(p==='/agent/actions/'+actionId+'/events'){
         streams++;return send('id: '+ '8'.repeat(64)+'\nevent: snapshot\ndata: '+JSON.stringify({action_id:actionId,job_id:job,status:'completed',kind:'vision_plan',progress:100,attempts:1,counts:{completed_images:2,total_images:2}})+'\n\n','text/event-stream');
@@ -61,8 +73,16 @@ test('visual draft requires preview and confirmation, then shows streamed task r
     await click('为所选版本安排图像识别');await until("!!document.getElementById('image_limit')");assert.equal(previews,0);assert.equal(confirmations,0);
     await click('查看执行预览');await until("document.body.textContent.includes('待确认的处理计划')");
     assert.equal(previews,1);assert.equal(confirmations,0);assert.ok(await evaluate("document.body.textContent.includes('裤长')"));
+    if(engine==='langgraph'){
+      await click('恢复流程');await until("document.body.textContent.includes('等待你确认')");
+      assert.equal(recoveries,1);assert.equal(confirmations,0);
+    }
     await click('确认提交');await until("document.body.textContent.includes('本次任务已结束')");
     assert.equal(confirmations,1);assert.equal(streams,1);assert.ok(await evaluate(`document.body.textContent.includes('${job}')`));
+    if(engine==='langgraph'){
+      for(let i=0;i<100&&reconciliations===0;i++)await pause(50);
+      assert.equal(reconciliations,1);
+    }else assert.equal(reconciliations,0);
     await cmd('Browser.close');
   }finally{socket?.close();if(browser.exitCode===null)browser.kill();await new Promise(r=>server.close(r));}
 });

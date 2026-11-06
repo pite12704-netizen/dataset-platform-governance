@@ -13,10 +13,10 @@ def test_request_replay_and_different_payload_conflict(app,client,actors,monkeyp
     owner=actors['owner'];_,version=create_dataset(client,owner)
     request_id=uuid.uuid4().hex
     enable(app,monkeypatch,[tool(args={'version_id':version['id']}),final([version['id']])])
-    response=ask(client,owner,request_id=request_id);assert response.status_code==200,response.text
+    response=ask(client,owner,request_id=request_id,message='读取版本详情');assert response.status_code==200,response.text
     first=response.json();assert first['status']=='completed'
     monkeypatch.setattr('app.agent_runtime.async_model_response',lambda *args:(_ for _ in ()).throw(AssertionError('replayed model call')))
-    response=ask(client,owner,request_id=request_id)
+    response=ask(client,owner,request_id=request_id,message='读取版本详情')
     assert response.status_code==200 and response.json()['replayed'] and response.json()['run_id']==first['run_id']
     assert ask(client,owner,request_id=request_id,message='different').status_code==409
     with app.state.db.Session() as db:
@@ -39,7 +39,7 @@ def test_multi_turn_history_is_bounded_and_redacts_revoked_quality(app,client,ac
             assert len(json.dumps(payload['prior_conversation_is_untrusted']).encode())<=settings.agent_history_bytes*2
             return next(replies)
         monkeypatch.setattr('app.agent_runtime.async_model_response',model)
-        response=ask(client,reader,conversation_id=first['conversation_id'],message='继续比较这份数据').json()
+        response=ask(client,reader,conversation_id=first['conversation_id'],message='继续读取这份数据的版本详情').json()
         assert response['status']=='completed'
         assert bool(captured[-1]) is expected
     run_followup(True)

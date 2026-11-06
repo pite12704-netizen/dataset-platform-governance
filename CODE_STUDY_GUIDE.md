@@ -1,4 +1,27 @@
-# Code navigation
+# 代码阅读指南
+
+建议先按 [项目阅读与演示路线](docs/project-tour.md) 跑一条真实请求，再选择下面的方向。
+
+**数据治理平台**：`main → auth/security/policy → datasets/uploads/imports → tasks/dispatching → review_workbench → delivery/downloads`。
+重点看事务边界、外部存储与 SQL 的一致性、任务幂等、领取租约、角色隔离和发布快照。
+
+**平台 Agent 子模块**：`assistant → agent_runtime/agent_protocol → agent_tools → assistant_tools`；
+写操作追 `prepare_action → agent_graph → agent_graph_store → execute_action → Celery`。
+检索追 `retrieval_events → retrieval_indexing → retrieval_service → retrieval`。
+重点区分模型决策、后端鉴权、人工确认、任务执行，以及聊天摘要、图检查点和版本事实。
+
+下方保留按文件分类的索引。
+
+Local model decisions: see [Schema protocol and live gates](docs/agent-local-model-protocol.md),
+following `agent_protocol → agent_runtime → agent_tools`, then the live held-out evaluator.
+
+Optional LangGraph: follow `assistant.prepare_action → agent_graph.drive → approval/submit/wait_task`.
+`agent_graph_store.SQLGraphSaver` persists bounded JSON checkpoints with fenced leases; Celery still executes jobs.
+See the [Chinese workflow guide](docs/langgraph-workflow-learning-guide.md) for migration, confirmation, recovery and tests.
+
+Optional retrieval: follow `retrieval_events → retrieval_indexing → retrieval_service → retrieval`.
+See the [Chinese code learning guide](docs/retrieval-learning-guide.md) for function roles, permissions,
+deployment prerequisites and the distinction between isolated behavior tests and real model evaluation.
 
 Start with the public [architecture guide](docs/public/architecture.md).
 

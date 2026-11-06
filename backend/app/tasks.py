@@ -860,7 +860,34 @@ def celery_app(settings=None):
                             task_default_queue="celery", task_routes={"dataset.sweep": {"queue": "celery"}},
                             beat_schedule={"durable-outbox": {"task": "dataset.sweep", "schedule": 30.0},
                                 "mail-outbox":{"task":"dataset.deliver_mail","schedule":15.0,
-                                               "options":{"queue":"platform.mail"}}})
+                                               "options":{"queue":"platform.mail"}},
+                                "retrieval-outbox":{"task":"dataset.retrieval","schedule":10.0,
+                                               "options":{"queue":"platform.retrieval", "expires":15}}})
+
+        @_celery.task(name="dataset.retrieval")
+        def retrieval_delivery():
+            cfg = get_settings()
+            if not cfg.retrieval_enabled:
+                return
+            from .retrieval_indexing import process_batch, reconcile_orphans
+            database, storage = Database(cfg.database_url, cfg), None
+            try:
+                storage = make_storage(cfg)
+                # 一次唤醒在有界时间窗内持续消费，避免每10秒只处理8张。
+                # 单个事件的HTTP仍有超时；迟到的重复唤醒消息会过期。
+                until = time.monotonic()+20
+                while time.monotonic() < until:
+                    from .retrieval_indexing import eligible as index_eligible
+                    from .models import RetrievalEvent
+                    with database.Session() as db:
+                        if not db.scalar(select(RetrievalEvent.id).where(index_eligible()).limit(1)):
+                            break
+                    process_batch(database, storage, cfg)
+                reconcile_orphans(database, cfg)
+            finally:
+                if storage is not None:
+                    storage.close()
+                database.engine.dispose()
 
         @_celery.task(name='dataset.deliver_mail')
         def mail_delivery():

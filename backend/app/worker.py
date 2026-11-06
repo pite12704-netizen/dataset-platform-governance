@@ -10,7 +10,8 @@ app = celery_app(settings)
 
 @worker_ready.connect
 def worker_presence(sender=None, **kwargs):
-    expected = {'vision':'platform.vision','mail':'platform.mail','worker':'celery'}[settings.worker_role]
+    expected = {'vision':'platform.vision','mail':'platform.mail','worker':'celery',
+                'retrieval':'platform.retrieval'}[settings.worker_role]
     queues = {q.name for q in sender.task_consumer.queues} if sender else set()
     if queues != {expected}:
         # 配错消费队列时不能报告健康，避免看似有视觉 Worker 却无人处理。

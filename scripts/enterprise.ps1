@@ -173,6 +173,7 @@ try {
             $definedServices = @(& docker @composeArgs config --services)
             if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect selected deployment services.' }
             if ($definedServices -contains 'mail-worker') { $appServices += 'mail-worker' }
+            if ($definedServices -contains 'retrieval-worker') { $appServices += 'retrieval-worker' }
             Invoke-Compose (@('up','-d','--no-deps','--no-build','--force-recreate') + $appServices)
         }
         'create-admin' {
@@ -191,6 +192,7 @@ try {
             $definedServices = @(& docker @composeArgs config --services)
             if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect selected deployment services.' }
             if ($definedServices -contains 'mail-worker') { $appServices += 'mail-worker' }
+            if ($definedServices -contains 'retrieval-worker') { $appServices += 'retrieval-worker' }
             $runningIds = @(& docker @composeArgs ps --status running -q @appServices)
             if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect running application containers.' }
             foreach ($containerId in $runningIds) { if ($containerId -notmatch '^[a-f0-9]{12,64}$') { throw 'Invalid container identity.' } }
@@ -202,7 +204,9 @@ try {
                 # 无活动任务或未完成上传时才生成快照，拒绝不一致备份。
                 & $python scripts/platform_data.py inventory --source-env $SourceEnv
                 if ($LASTEXITCODE -ne 0) { throw 'Drain pending jobs and complete/abort uploads, then retry backup.' }
-                Invoke-Compose @('stop','beat','worker','vision-worker')
+                $backgroundServices = @('beat','worker','vision-worker')
+                if ($definedServices -contains 'retrieval-worker') { $backgroundServices += 'retrieval-worker' }
+                Invoke-Compose (@('stop') + $backgroundServices)
                 & $python scripts/platform_data.py backup --source-env $SourceEnv --bundle $Bundle --key-file $backupKey --quiesced
                 if ($LASTEXITCODE -ne 0) { throw 'Backup failed; original data remains intact.' }
             } finally {

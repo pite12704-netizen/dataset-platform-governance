@@ -10,4 +10,6 @@ On GitHub, enable private vulnerability reporting and secret-scanning/push prote
 
 MIT applies to the contributors' own project code. Preserve third-party licenses and obtain dataset/model redistribution rights separately. The public export is not a promise that every external service or model has the same license.
 
+For an **existing public repository**, clone its current default branch into a new directory, preserve its `.git`, and compare the new reviewed export with that checkout. Update only reviewed public paths, audit the staged changes and reachable history, then make a normal commit and push. Preserve remote commits and other contributors' work; do not replace history or force-push merely to refresh a source snapshot. The manifest should describe the final committed public files.
+
 If credentials were already public, revoke them before attempting history cleanup. Merely deleting a file or making a repository private does not recall forks or previous clones. See [GitHub's sensitive-data guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).

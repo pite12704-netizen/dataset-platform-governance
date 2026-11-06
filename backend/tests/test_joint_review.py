@@ -84,7 +84,7 @@ def test_separate_roles_joint_dedup_preserves_raw_and_exports_reviewed_represent
     import copy
     with app.state.db.Session() as db:
         table=db.get(ImageReviewImage,review['id']);assert table.snapshot['dedup_excluded'] is True
-    state=snapshot(app.state.db);assert state['schema_version']==11
+    state=snapshot(app.state.db);assert state['schema_version']==13
     restored=upgrade_manifest(copy.deepcopy(state));assert restored['tables']['duplicate_pair_reviews'][0]['approved_duplicate'] is True
     bad=copy.deepcopy(state);bad['tables']['duplicate_pair_reviews'][0]['right_asset_id']='f'*32
     import hashlib

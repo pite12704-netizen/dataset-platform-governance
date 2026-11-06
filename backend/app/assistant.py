@@ -27,7 +27,7 @@ from .tasks import authorized_job, dispatch, queue_job, validate_job
 from .workflows import create_application
 
 router = APIRouter(prefix="/api/v1/agent", tags=["数据工作助手"])
-Intent = Literal["auto", "agent", "search", "compare", "quality", "application", "jobs", "quality_job", "convert", "package", "diagnose", "vision", "dedup"]
+Intent = Literal["auto", "agent", "search", "compare", "quality", "application", "jobs", "quality_job", "convert", "package", "diagnose", "vision", "dedup", "knowledge", "semantic_search"]
 
 
 class ChatInput(s.Input):
@@ -62,7 +62,9 @@ def conversation_for(db, user, conversation_id):
 
 def detect_intent(message):
     """离线意图识别：命中业务关键词；前端也可传明确 intent 跳过自动判断。"""
-    for words, intent in [(("为什么不能发布", "卡在哪", "流程诊断", "下一步该做", "下一步做什么"), "diagnose"),
+    for words, intent in [(("平台知识", "知识库", "审核规范", "操作手册"), "knowledge"),
+                          (("语义搜索", "语义查找", "自然语言找数据"), "semantic_search"),
+                          (("为什么不能发布", "卡在哪", "流程诊断", "下一步该做", "下一步做什么"), "diagnose"),
                           (("图像识别", "人物识别", "预标注", "运行识别", "开始识别", "识别所选", "识别图片", "识别这批"), "vision"),
                           (("重复检测", "去重检测", "运行去重", "发起去重"), "dedup"),
                           (("任务进度", "任务状态", "我的任务", "任务查询"), "jobs"),
@@ -85,6 +87,8 @@ def capabilities(request: Request, user=Depends(current_user)):
             "mode": "bounded-tools" if settings.agent_tools_enabled and settings.model_url and settings.model_name
                     else "model-assisted" if settings.model_url and settings.model_name else "offline-tools",
             "agent_tools_enabled": bool(settings.agent_tools_enabled and settings.model_url and settings.model_name),
+            "workflow_engine": settings.agent_workflow_engine,
+            "agent_protocol": settings.agent_protocol,
             "execution_limits": {"rounds": settings.agent_max_rounds, "tool_calls": settings.agent_max_tool_calls,
                                  "seconds": settings.agent_timeout_seconds},
             "mcp_enabled": bool(settings.mcp_issuer and settings.mcp_audience and settings.mcp_jwks_url),
@@ -113,7 +117,7 @@ def clear_conversation(conversation_id:str,db=Depends(get_db),user=Depends(inter
     conversation=fetch(db,AgentConversation,conversation.id,lock=True)
     for row in rows:redact_run(row)
     for action in db.scalars(select(AgentAction).where(AgentAction.conversation_id==conversation.id).with_for_update()):
-        redact_action(action)
+        redact_action(action, db=db)
     conversation.title='已清除内容';conversation.active_run_id=None;conversation.active_until=None
     conversation.revision+=1;conversation.updated_at=now()
     audit(db,user,'agent.conversation.clear',conversation.id,runs=len(rows))
@@ -134,8 +138,8 @@ def pin_context(conversation_id:str,run_id:str,data:Pin,request:Request,db=Depen
     run=fetch(db,AgentRun,run_id,lock=True)
     require(run.conversation_id==conversation.id and run.user_id==user.id,'记录不属于此对话',404)
     if data.pinned:
-        require(run.source=='assistant' and run.status in {'completed','degraded'} and not run.outputs.get('draft') and run.tool in {'agent','search','compare','quality','jobs'},
-                '只能固定只读查询线索，不能将确认单或写操作作为记忆',409)
+        require(run.source=='assistant' and run.status in {'completed','degraded'} and not run.outputs.get('draft') and run.tool in {'agent','search','compare','quality','jobs','knowledge','semantic_search'},
+                '只能收藏只读查询结果，不能收藏确认单或写操作',409)
         require(not safe_run(db,user,request.app.state.settings,run)['outputs'].get('redacted'),'原始权限已变化',403)
         count=db.scalar(select(func.count()).select_from(AgentRun).where(AgentRun.conversation_id==conversation.id,
             AgentRun.id!=run.id,AgentRun.outputs['memory_pinned'].as_boolean().is_(True)))
@@ -156,6 +160,8 @@ def safe_run(db, user, settings, run):
     if run.status == 'running' and run.created_at + timedelta(seconds=settings.agent_timeout_seconds + 30) < now():
         result['status'] = 'interrupted'
     try:
+        from .retrieval_service import check_references
+        check_references(db, user, settings, run.outputs)
         for ref in run.outputs.get('access_requirements', []):
             version, _ = t.visible_version(db, user, settings, ref['version_id'])
             if ref.get('manage'):
@@ -239,6 +245,8 @@ def prepare_chat(db, data, request):
             db.add(conversation)
             db.flush()
     intent = detect_intent(data.message) if data.intent == "auto" else data.intent
+    if intent == 'search' and settings.retrieval_enabled:
+        intent = 'semantic_search'
     version_ids = list(dict.fromkeys(data.version_ids))
     if not version_ids and conversation and intent not in {"search", "jobs"}:
         previous = db.scalar(select(AgentRun).where(AgentRun.conversation_id == conversation.id,
@@ -262,6 +270,15 @@ def prepare_chat(db, data, request):
         saved = safe_run(db, user, settings, run)
         return {'replay': {**saved['outputs'], 'run_id': run.id, 'conversation_id': run.conversation_id,
                 'duration_ms': run.duration_ms, 'replayed': True}}
+    if intent in {'knowledge', 'semantic_search'}:
+        enforce_scope(request, 'catalog:read')
+        from .agent_query_memory import prepare
+        memory = prepare(db,user,run.conversation_id,data.message,
+                         'knowledge' if intent=='knowledge' else 'catalog',run.id)
+        run.tool = intent
+        db.commit()
+        return {**chat_context(run, user, intent, version_ids, request), 'bounded': False,
+                'retrieval': True, 'result': result, 'messages': None, 'query_memory':memory}
     if intent == 'agent' or (data.intent == 'auto' and settings.agent_tools_enabled
             and settings.model_url and settings.model_name and intent in {'search', 'compare', 'quality'}):
         require(settings.agent_tools_enabled and settings.model_url and settings.model_name,
@@ -375,7 +392,7 @@ def finish_chat(db, request, context, result, started):
         except HTTPException:
             result = {'answer': '登录状态或数据权限已变化，请重新查询', 'citations': [],
                       'mode': 'offline-tools', 'status': 'failed', 'failure_reason': 'permission_changed'}
-        run.model = settings.model_name[:100] if context['bounded'] else result['mode']
+        run.model = settings.model_name[:100] if context['bounded'] or result.get('mode') == 'knowledge-rag' else result['mode']
         run.outputs, run.status = jsonable_encoder(result), result['status']
         run.duration_ms = int((time.monotonic() - started) * 1000)
         if run.conversation_id:
@@ -383,7 +400,7 @@ def finish_chat(db, request, context, result, started):
         finish_turn(db, run)
         audit(db, user, 'agent.chat', run.id, tool=run.tool, status=run.status)
         db.commit()
-    return {**result, 'run_id': run.id, 'conversation_id': run.conversation_id, 'duration_ms': run.duration_ms}
+    return {**result, 'tool': run.tool, 'run_id': run.id, 'conversation_id': run.conversation_id, 'duration_ms': run.duration_ms}
 
 
 def interrupt_chat(db, context, reason, started):
@@ -445,6 +462,35 @@ async def chat(data: ChatInput, request: Request):
 
     async def compute():
         with gateway_context(request.app.state.model_gateway):
+            if context.get('retrieval'):
+                from .retrieval import answer_knowledge, execute_search, SearchInput
+                if context['query_memory'].get('needs_history_clarification'):
+                    return {'answer':'当前问题或累计附加条件超过自动摘要的有界范围。原消息仍保留，请用“重新找……”集中描述当前需求。',
+                            'citations':[],'mode':'needs-clarification','status':'completed','query_memory':context['query_memory']}
+                if context['intent'] == 'knowledge':
+                    answer = await answer_knowledge(SearchInput(query=context['query_memory']['effective_query']), request)
+                    return {**answer,'query_memory':context['query_memory']}
+                memory=context['query_memory']
+                if memory.get('needs_history_clarification'):
+                    return {'answer':'附加条件已超过自动摘要的有界范围。原始消息仍保留，请用“重新找……”集中描述当前条件，避免遗漏或错误合并。',
+                            'citations':[],'mode':'needs-clarification','status':'completed','query_memory':memory}
+                if memory.get('unresolved'):
+                    return {'answer':'已保留此前需求，但这条否定条件尚不能可靠转换为当前检索规则，请明确修改或取消该条件。不会忽略它继续推荐。',
+                            'citations':[],'mode':'needs-clarification','status':'completed','query_memory':memory}
+                scoped=any(word in data.message for word in ('这些','这几个','其中','所选','这批'))
+                scope_ids=(context['version_ids'] or memory.get('candidate_versions',[])) if scoped else None
+                found = await execute_search(request, 'catalog', question=memory['effective_query'],
+                    modality=memory.get('modality'), concepts=memory['concepts'],excluded_modalities=memory['excluded_modalities'],version_ids=scope_ids)
+                memory['candidate_versions']=[c['version_id'] for c in found['items']][:8]
+                has_verified=any(i.get('content_evidence') for i in found['items'])
+                answer=(f"找到 {len(found['items'])} 个版本，匹配数量来自已独立复核的同一人物标签。" if has_verified else
+                    f"找到 {len(found['items'])} 个目录候选；文字说明不等于图片已核验。" if found['items'] else
+                    '已理解这些条件，但没有找到有权读取且已独立复核的同一人物标签同时满足的图片。默认人物模板没有性别字段；若未配置该字段或尚未复核，请先完善人物模板并完成识别与复核，不能用“不确定”代替“不戴帽子”。这不代表原图中没有相关人物。' if found.get('requires_verified_labels') else
+                    "当前可访问目录中，没有找到明确支持这些条件的资料。不能据此断言原图没有相关内容；可补充数据集说明或对获授权图片进行识别与人工复核。")
+                return {'answer': answer,
+                    'citations': found['items'], 'mode': 'catalog-'+found['mode'],
+                    'status': 'degraded' if found['degraded'] else 'completed', 'retrieval': found,'query_memory':memory,
+                    'access_requirements':found.get('access_requirements',[])}
             if context['bounded']:
                 return await run_loop_async(settings, data.message, context['version_ids'], context['scopes'],
                     execute, validate, emit, history=context['history'], history_refs=context['refs'])
@@ -587,11 +633,21 @@ def prepare_action(data: ActionInput, request: Request, db=Depends(get_db), user
     if workflow:
         action.summary={**action.summary,'workflow':workflow,'input_files':workflow['images'],
             'input_bytes':workflow.get('input_bytes',total),'resource_estimate':'按冻结计划执行；模型时间无法预先保证。数据、模板或模型配置变化后须重新预览。'}
+    elif request.app.state.settings.agent_workflow_engine == 'langgraph':
+        from .quality_contract import digest
+        action.summary = {**action.summary,
+            'content_fingerprint': digest(sorted((a.id, a.size, a.sha256, a.status) for a in assets)),
+            'metadata_fingerprint': digest([version.status, version.source, version.license])}
     db.add(action)
     db.flush()
+    from .agent_graph import register, public_action
+    register(db, action, request.app.state.settings)
     audit(db, user, "agent.action.prepare", action.id, ds.space_id, kind=data.kind, version_id=version.id)
     db.commit()
-    return public_row(action)
+    if request.app.state.settings.agent_workflow_engine == 'langgraph':
+        from .agent_graph import drive
+        return drive(request, user.id, action.id, 'start')
+    return public_action(db, action)
 
 
 def owned_action(db, user, action_id):
@@ -609,7 +665,8 @@ def actions(request: Request, db=Depends(get_db), user=Depends(interactive_user)
             v, _ = t.visible_version(db, user, request.app.state.settings, action.version_id)
             if action.kind != "application":
                 require(can_read_content(db, user, v, request.app.state.settings))
-            row = public_row(action)
+            from .agent_graph import public_action
+            row = public_action(db, action)
             if action.status == "pending" and action.expires_at <= now():
                 row["status"] = "expired"
             rows.append(row)
@@ -622,6 +679,13 @@ def actions(request: Request, db=Depends(get_db), user=Depends(interactive_user)
 def confirm_action(action_id: str, data: Confirmation, request: Request, db=Depends(get_db), user=Depends(interactive_user)):
     """确认入口：记录拒绝原因；真正执行由 execute_action 在同一事务中完成。"""
     try:
+        from .models import AgentGraphWorkflow
+        action = owned_action(db, user, action_id)
+        if db.get(AgentGraphWorkflow, action.id):
+            from .agent_graph import drive
+            user_id = user.id
+            db.rollback()
+            return drive(request, user_id, action_id, 'confirm')
         return execute_action(action_id, request, db, user)
     except HTTPException as exc:
         db.rollback()
@@ -633,12 +697,16 @@ def confirm_action(action_id: str, data: Confirmation, request: Request, db=Depe
         raise
 
 
-def execute_action(action_id, request, db, user):
+def execute_action(action_id, request, db, user, *, dispatch_task=True):
     """重新校验身份、版本和授权，再以 action.id 作为幂等键创建业务记录。"""
     action = owned_action(db, user, action_id)
     payload = ActionInput(**action.payload)
     workflow=None
-    if action.kind not in {'vision','dedup'}:action_validation(db, user, request.app.state.settings, payload)
+    if action.kind not in {'vision','dedup'}:
+        if action.kind != 'application' and action.summary.get('content_fingerprint'):
+            from .workflows import locked_version
+            locked_version(db, action.version_id)
+        v, ds, assets = action_validation(db, user, request.app.state.settings, payload)
     else:
         from .policy import manage_dataset
         from .workflows import locked_version
@@ -647,6 +715,11 @@ def execute_action(action_id, request, db, user):
     if action.status == "completed":
         return public_row(action)
     require(action.status == "pending" and action.expires_at > now(), "操作已取消或过期，请重新预览", 409)
+    if action.summary.get('content_fingerprint'):
+        from .quality_contract import digest
+        require(action.summary['content_fingerprint'] == digest(sorted((a.id, a.size, a.sha256, a.status) for a in assets))
+            and action.summary['metadata_fingerprint'] == digest([v.status, v.source, v.license]),
+            '输入文件或版本说明已变化，请重新预览后确认', 409)
     if action.kind in {'vision','dedup'}:
         from .agent_workflows import vision_preview,dedup_preview
         if action.kind=='vision':v,ds,assets,selected,workflow=vision_preview(db,user,action.version_id,request.app.state.settings,payload.image_limit or 100)
@@ -679,10 +752,10 @@ def execute_action(action_id, request, db, user):
                  "citations": [t.version_info(db, user, request.app.state.settings, action.version_id)]}))
     audit(db, user, "agent.action.confirm", action.id, version_id=action.version_id, **result)
     db.commit()
-    if action.kind=='vision':
+    if dispatch_task and action.kind=='vision':
         from .agent_workflows import start_vision
         start_vision(request.app,result['job_id'])
-    elif action.kind != "application":
+    elif dispatch_task and action.kind != "application":
         dispatch(request.app, result["job_id"])
     return public_row(action)
 
@@ -694,6 +767,8 @@ def cancel_action(action_id: str, db=Depends(get_db), user=Depends(interactive_u
         changed = db.execute(update(AgentAction).where(AgentAction.id == action.id, AgentAction.status == "pending")
                               .values(status="cancelled"))
         require(changed.rowcount == 1, "此操作已提交，请在任务中心管理任务", 409)
+        from .agent_graph import invalidate
+        invalidate(db, action)
         audit(db, user, "agent.action.cancel", action.id)
         db.commit()
     return public_row(action)

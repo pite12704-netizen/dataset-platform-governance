@@ -48,7 +48,7 @@ def test_legacy_v8_mysql_boolean_backup_restores_to_new_namespace(app, actors, t
     with pytest.raises(RuntimeError,match='bounded maintenance-backup budget'):
         exercise(bundle,key,app_key,max_metadata_bytes=1024)
     _, result = exercise(bundle, key, app_key,max_metadata_bytes=2*1024**2)
-    assert result['schema_version'] == 11 and result['tables_verified'] == 42
+    assert result['schema_version'] == 13 and result['tables_verified'] == 48
     assert result['metadata_budget_bytes']==2*1024**2
     assert result['isolated'] and not result['business_services_accessed']
 
@@ -104,5 +104,5 @@ def test_encrypted_restore_exercise_uses_a_new_namespace_and_verifies_files(app,
     app_key=tmp_path/'app_key';app_key.write_text(app.state.settings.secret_key)
     bundle=tmp_path/'sample.enc';staged.seek(0);encrypted_copy(staged,bundle,bytes.fromhex('ab'*32))
     path,result=exercise(bundle,key,app_key)
-    assert result['isolated'] and result['objects_verified']>=1 and result['schema_version']==11
+    assert result['isolated'] and result['objects_verified']>=1 and result['schema_version']==13
     assert path.parent.name.startswith('restore-') and not result['business_services_accessed']

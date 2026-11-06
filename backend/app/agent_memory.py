@@ -91,7 +91,7 @@ def history_context(db, user, conversation_id, request, settings, exclude_run_id
     history, requirements, size = [], [], 0
     for row in rows:
         # 含写操作草稿的问答不进入模型记忆；确认必须走独立交互流程。
-        if row.outputs.get('draft') or row.tool in {'application', 'convert', 'package', 'quality_job'}:
+        if row.outputs.get('draft') or row.tool in {'application', 'convert', 'package', 'quality_job', 'knowledge', 'semantic_search'}:
             continue
         refs = list(row.outputs.get('access_requirements', []))
         refs += [{'version_id': c['version_id'], 'content': row.tool == 'quality', 'scope': 'catalog:read'}

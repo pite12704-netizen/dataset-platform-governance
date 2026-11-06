@@ -4,13 +4,19 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from scripts import audit_repository as audit
 
-ROOT_FILES={'.gitignore','.dockerignore','AGENTS.md','pyproject.toml','converter_core.py','start-platform.ps1',
+ROOT_FILES={'.gitignore','.gitattributes','.dockerignore','AGENTS.md','pyproject.toml','converter_core.py','start-platform.ps1',
     'LICENSE','THIRD_PARTY_NOTICES.md','SECURITY.md','CONTRIBUTING.md'}
-TREES={'backend','frontend','clients','deployment','scripts','.github'}
+TREES={'backend','frontend','clients','deployment','scripts','.github','services'}
 EXTENSIONS={'.py','.mjs','.ts','.tsx','.css','.html','.json','.yml','.yaml','.toml','.ini','.mako','.md','.txt','.lock','.ps1','.sh','.svg','.example'}
 OVERRIDES={'README.md':'docs/public/README.md','CODE_STUDY_GUIDE.md':'docs/public/CODE_STUDY_GUIDE.md',
     'docs/public/architecture.md':'docs/public/architecture.md','docs/public/deployment.md':'docs/public/deployment.md',
     'docs/public/github-publication.md':'docs/public/github-publication.md',
+    'docs/retrieval-learning-guide.md':'docs/retrieval-learning-guide.md',
+    'docs/agent-automatic-query-memory.md':'docs/agent-automatic-query-memory.md',
+    'docs/bm25-and-agent-evidence.md':'docs/bm25-and-agent-evidence.md',
+    'docs/langgraph-workflow-learning-guide.md':'docs/langgraph-workflow-learning-guide.md',
+    'docs/agent-local-model-protocol.md':'docs/agent-local-model-protocol.md',
+    'docs/project-tour.md':'docs/project-tour.md',
     'docs/cloud-development.md':'docs/public/cloud-development.md'}
 PRIVATE=re.compile(r'(?i:[A-Za-z]:[\\/](?:Dataset Platform|Users[\\/][A-Za-z0-9_.-]+[\\/]|DatasetPlatform(?:Runtime|Recovery)))|/Users/[A-Za-z0-9_.-]+/')
 
@@ -18,7 +24,8 @@ def selected(name):
     p=Path(name)
     if audit.forbidden_path(name):return False
     if name in ROOT_FILES:return True
-    if name=='config/development.json' or name.startswith('config/examples/'):return p.suffix=='.json'
+    if name=='config/development.json' or name.startswith('config/examples/'):
+        return p.suffix=='.json' or p.name.endswith('.env.example')
     return p.parts[0] in TREES and (p.suffix in EXTENSIONS or p.name.startswith(('Dockerfile','Caddyfile')))
 
 def files(root):
@@ -74,7 +81,10 @@ def export(destination):
     if findings:return {'passed':False,'findings':findings}
     destination.mkdir(parents=True,exist_ok=False);entries=[]
     for name,source in sorted(choices.items()):
-        target=destination/name;target.parent.mkdir(parents=True,exist_ok=True);data=source.read_bytes();target.write_bytes(data)
+        target=destination/name;target.parent.mkdir(parents=True,exist_ok=True)
+        # Public files are audited UTF-8 text. Hash the LF-normalized bytes that
+        # .gitattributes checks out on both Windows and Linux, rather than host EOLs.
+        data=source.read_bytes().replace(b'\r\n',b'\n');target.write_bytes(data)
         entries.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)})
     (destination/'public-source.json').write_text(json.dumps({'schema_version':1,'license':'MIT','history_included':False,
         'datasets_included':False,'weights_included':False,'files':entries},indent=2),encoding='utf-8')

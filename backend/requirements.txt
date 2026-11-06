@@ -24,3 +24,6 @@ ruff>=0.9,<1
 # Security floors for shared TLS roots and artifact locking.
 certifi>=2026.10.19
 filelock>=4.2.1,<5
+
+# Stateful, human-confirmed orchestration; business tools retain their own authorization.
+langgraph>=1.2.20,<1.3

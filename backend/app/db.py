@@ -55,7 +55,10 @@ class Database:
             @event.listens_for(self.engine, "connect")
             def sqlite_config(conn, _):
                 conn.execute("PRAGMA foreign_keys=ON")
-        self.Session = sessionmaker(self.engine, expire_on_commit=False)
+        self.Session = sessionmaker(self.engine, expire_on_commit=False,
+                                    info={"retrieval_enabled": bool(settings and settings.retrieval_enabled)})
+        # 注册事务 outbox；监听器仅对显式启用检索的会话工作。
+        from . import retrieval_events  # noqa: F401
 
 
 def get_db(request: Request):
@@ -91,7 +94,8 @@ class AsyncDatabase:
             @event.listens_for(self.engine.sync_engine, "connect")
             def sqlite_config(conn, _):
                 conn.execute("PRAGMA foreign_keys=ON")
-        self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        self.Session = async_sessionmaker(self.engine, expire_on_commit=False,
+            info={"retrieval_enabled": settings.retrieval_enabled})
         self.timeout = settings.database_read_timeout + settings.database_pool_timeout
 
     async def run(self, operation, *args):

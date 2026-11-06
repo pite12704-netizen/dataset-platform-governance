@@ -11,6 +11,7 @@ import { AuditPage, CredentialsPage, GovernancePage, JobsPage, OrganizationPage,
 import './style.css';
 
 const AgentPage=React.lazy(()=>import('./pages/agent').then(m=>({default:m.AgentPage}))); 
+const RetrievalPage=React.lazy(()=>import('./pages/retrieval').then(m=>({default:m.RetrievalPage})));
 const ImagePilotPage=React.lazy(()=>import('./pages/image-pilot').then(m=>({default:m.ImagePilotPage}))); 
 const ReviewInbox=React.lazy(()=>import('./pages/review-workbench').then(m=>({default:m.ReviewInbox})));
 const ReviewWorkspaceRoute=React.lazy(()=>import('./pages/review-workbench').then(m=>({default:m.ReviewWorkspaceRoute})));
@@ -52,7 +53,7 @@ function Shell() {
     {title:'数据生产与治理',items:[{path:'/upload',label:'上传数据',icon:<PlusOutlined/>},{path:'/imports',label:'批量导入',icon:<FolderOpenOutlined/>},{path:'/image-pilot',label:'图像识别',icon:<AppstoreOutlined/>},{path:'/jobs',label:'处理任务',icon:<ThunderboltOutlined/>}]},
     {title:'标注与复核',items:[{path:'/image-reviews',label:'图像标注与复核',icon:<CheckSquareOutlined/>}]},
     {title:'独立测评',items:[{path:'/evaluations',label:'测评工作台',icon:<SafetyCertificateOutlined/>}]},
-    {title:'协作与接入',items:[{path:'/organizations',label:'组织与项目',icon:<TeamOutlined/>},{path:'/agent',label:'数据工作助手',icon:<RobotOutlined/>},{path:'/credentials',label:'开发者接入',icon:<SettingOutlined/>},{path:'/audit',label:'操作记录',icon:<UserOutlined/>}]}
+    {title:'协作与接入',items:[{path:'/organizations',label:'组织与项目',icon:<TeamOutlined/>},{path:'/agent',label:'数据工作助手',icon:<RobotOutlined/>},{path:'/retrieval',label:'知识与多模态检索',icon:<DatabaseOutlined/>},{path:'/credentials',label:'开发者接入',icon:<SettingOutlined/>},{path:'/audit',label:'操作记录',icon:<UserOutlined/>}]}
   ];
   const menus=menuGroups.flatMap(group=>group.items);
   const selected=(path:string)=>location.pathname===path||(path!=='/'&&location.pathname.startsWith(path+'/'));
@@ -76,6 +77,7 @@ function Shell() {
       <Route path="/upload" element={protectedPage(<UploadPage/>)}/><Route path="/requests" element={protectedPage(<RequestsPage/>)}/>
       <Route path="/jobs" element={protectedPage(<JobsPage/>)}/><Route path="/organizations" element={protectedPage(<OrganizationPage/>)}/>
       <Route path="/agent" element={protectedPage(<AgentPage/>)}/><Route path="/credentials" element={protectedPage(<CredentialsPage/>)}/>
+      <Route path="/retrieval" element={protectedPage(<RetrievalPage/>)}/>
       <Route path="/image-pilot" element={protectedPage(<ImagePilotPage/>)}/><Route path="/image-pilot/:versionId" element={protectedPage(<ImagePilotPage/>)}/>
       <Route path="/image-reviews" element={protectedPage(<ReviewInbox/>)}/><Route path="/image-reviews/workbench/:versionId" element={protectedPage(<ReviewWorkspaceRoute/>)}/><Route path="/image-reviews/:batchId" element={protectedPage(<ReviewBatchEntry/>)}/>
       <Route path="/deliveries/:versionId" element={protectedPage(<DeliveryPage/>)}/>

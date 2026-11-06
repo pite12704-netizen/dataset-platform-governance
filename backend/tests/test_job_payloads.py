@@ -79,7 +79,7 @@ def test_legacy_large_row_is_compacted_before_first_orm_mutation(client,actors,a
 def test_old_backup_upgrade_preserves_frozen_inputs_and_rejects_payload_tampering():
     manifest={'schema_version':9,'tables':{'jobs':[{'id':'a'*32,'created_at':now(),'parameters':{'input_assets':large_manifest(100)},'result':{}}]}}
     manifest['metadata_sha256']=hashlib.sha256(backup_canonical(manifest['tables'])).hexdigest()
-    result=upgrade_manifest(copy.deepcopy(manifest));assert result['schema_version']==11
+    result=upgrade_manifest(copy.deepcopy(manifest));assert result['schema_version']==13
     job=result['tables']['jobs'][0];row=result['tables']['job_payloads'][0]
     value=unpack(SimpleNamespace(**row),job['id'],'parameters','input_assets',job['parameters'][REFS]['input_assets'])
     assert value==manifest['tables']['jobs'][0]['parameters']['input_assets']

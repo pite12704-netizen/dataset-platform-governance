@@ -1,0 +1,95 @@
+# Optional overlay. Requires reviewed images, local models, secrets and a maintenance migration.
+# Does not publish vector/encoder ports. Ordinary enterprise.ps1 does not auto-load this file.
+x-retrieval-secrets: &retrieval-secrets
+  - app_key
+  - session_signing_key
+  - mfa_encryption_keys
+  - database_url
+  - s3_access_key
+  - s3_secret_key
+  - redis_url
+  - retrieval_qdrant_key
+  - retrieval_encoder_key
+x-retrieval-env: &retrieval-env
+  DP_RETRIEVAL_ENABLED: 'true'
+  DP_RETRIEVAL_QDRANT_URL: http://qdrant:6333
+  DP_RETRIEVAL_ENCODER_URL: http://retrieval-encoder:8091
+  DP_RETRIEVAL_QDRANT_KEY_FILE: /run/secrets/retrieval_qdrant_key
+  DP_RETRIEVAL_ENCODER_KEY_FILE: /run/secrets/retrieval_encoder_key
+
+services:
+  api:
+    environment: *retrieval-env
+    secrets: *retrieval-secrets
+  worker:
+    environment: *retrieval-env
+    secrets: *retrieval-secrets
+  vision-worker:
+    environment: {<<: *retrieval-env, DP_WORKER_ROLE: vision}
+    secrets: *retrieval-secrets
+  mail-worker:
+    environment: {<<: *retrieval-env, DP_WORKER_ROLE: mail}
+    secrets: *retrieval-secrets
+  beat:
+    environment: *retrieval-env
+    secrets: *retrieval-secrets
+  migrate:
+    environment: *retrieval-env
+    secrets: *retrieval-secrets
+  retrieval-worker:
+    extends: {file: compose.yml, service: worker}
+    profiles: [retrieval]
+    environment: {<<: *retrieval-env, DP_WORKER_ROLE: retrieval}
+    secrets: *retrieval-secrets
+    command: [celery, -A, app.worker:app, worker, --queues=platform.retrieval, --hostname=retrieval@%h, --loglevel=INFO, --concurrency=1, --max-tasks-per-child=100]
+  qdrant:
+    profiles: [retrieval]
+    image: ${DP_QDRANT_IMAGE:?Set a reviewed Qdrant image digest}
+    restart: unless-stopped
+    mem_limit: 1536m
+    cpus: 2.0
+    pids_limit: 128
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment: {QDRANT__TELEMETRY_DISABLED: 'true'}
+    entrypoint: [/bin/sh, -ec]
+    command: ['export QDRANT__SERVICE__API_KEY="$$(cat /run/secrets/retrieval_qdrant_key)"; exec ./qdrant']
+    volumes: ['${DP_RETRIEVAL_DATA_ROOT:?Set an explicit data path on the data disk}/qdrant:/qdrant/storage']
+    secrets: [retrieval_qdrant_key]
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}
+  retrieval-encoder:
+    profiles: [retrieval]
+    image: ${DP_ENCODER_IMAGE:?Build and verify a dedicated encoder image}
+    restart: unless-stopped
+    mem_limit: ${DP_ENCODER_MEMORY_LIMIT:-6g}
+    cpus: 2.0
+    pids_limit: 128
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: ['/tmp:size=128m,mode=1777']
+    environment:
+      ENCODER_API_KEY_FILE: /run/secrets/retrieval_encoder_key
+      ENCODER_TEXT_PATH: /models/text
+      ENCODER_IMAGE_PATH: /models/image
+      ENCODER_TEXT_REVISION: ${DP_RETRIEVAL_TEXT_MODEL:-bge-m3-local-v1}
+      ENCODER_IMAGE_REVISION: ${DP_RETRIEVAL_IMAGE_MODEL:-chinese-clip-local-v1}
+      ENCODER_DEVICE: cpu
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+      OMP_NUM_THREADS: '2'
+    volumes:
+      - '${DP_TEXT_MODEL_DIR:?Set reviewed local text model directory}:/models/text:ro'
+      - '${DP_IMAGE_MODEL_DIR:?Set reviewed local image model directory}:/models/image:ro'
+    secrets: [retrieval_encoder_key]
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8091/health", timeout=3)']
+      interval: 15s
+      timeout: 4s
+      start_period: 120s
+      retries: 20
+    logging: {driver: json-file, options: {max-size: 10m, max-file: '3'}}
+
+secrets:
+  retrieval_qdrant_key: {file: '${DP_QDRANT_KEY_FILE:?Set external secret file}'}
+  retrieval_encoder_key: {file: '${DP_ENCODER_KEY_FILE:?Set external secret file}'}

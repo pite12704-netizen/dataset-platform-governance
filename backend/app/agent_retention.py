@@ -12,7 +12,10 @@ def redact_run(run):
     run.status='redacted'
 
 
-def redact_action(action):
+def redact_action(action, db=None):
+    if db is not None:
+        from .agent_graph import invalidate
+        invalidate(db, action, redacted=True)
     action.payload,action.summary={}, {'content_redacted':True}
     if action.status=='pending':action.status='cancelled'
 
@@ -26,7 +29,7 @@ def prune(database,settings):
         actions=db.scalars(select(AgentAction).where(AgentAction.created_at<cutoff,
             AgentAction.summary['content_redacted'].as_boolean().is_not(True))
             .order_by(AgentAction.id).limit(200).with_for_update(skip_locked=True)).all()
-        for action in actions:redact_action(action)
+        for action in actions:redact_action(action, db=db)
         db.commit()
     with database.Session() as db:
         conversations=db.scalars(select(AgentConversation).where(AgentConversation.updated_at<cutoff,

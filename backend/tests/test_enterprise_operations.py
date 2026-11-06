@@ -67,7 +67,7 @@ def test_v1_backup_gets_deterministic_review_batch_defaults():
     manifest={'schema_version':1,'tables':tables,
               'metadata_sha256':__import__('hashlib').sha256(canonical(tables)).hexdigest()}
     result=upgrade_manifest(manifest)
-    assert result['schema_version']==11
+    assert result['schema_version']==13
     assert result['tables']['image_review_batches'][0]['status']=='draft'
     assert result['tables']['image_review_batches'][0]['submitted_by_id'] is None
 
@@ -88,7 +88,7 @@ def test_restore_discards_temporary_review_leases_and_upgrades_v2():
                     'metadata_sha256': hashlib.sha256(canonical(tables)).hexdigest()}
         upgraded = upgrade_manifest(manifest)
         row = upgraded['tables']['image_review_items'][0]
-        assert upgraded['schema_version'] == 11 and row['revision'] == 4
+        assert upgraded['schema_version'] == 13 and row['revision'] == 4
         assert row['claimed_by_id'] is None and row['claim_token'] is None and row['claim_expires_at'] is None
         assert upgraded['metadata_sha256'] == hashlib.sha256(canonical(upgraded['tables'])).hexdigest()
 

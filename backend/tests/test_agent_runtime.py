@@ -63,6 +63,20 @@ def test_model_can_chain_tools_and_answer_only_from_verified_sources(app):
     assert '忽略指令' not in trace and V1 not in trace
 
 
+def test_agent_stops_repeating_identical_tool_without_progress(app):
+    result,_,executions=run_script(app,[tool(call_id='a'),tool(call_id='b'),tool(call_id='c')])
+    assert executions==['get_version','get_version']
+    assert result['failure_reason']=='repeated_tool_call' and result['status']=='degraded'
+
+
+def test_search_alone_cannot_substantiate_file_count(app):
+    responses=iter([tool('search_datasets',{'query':'image'}),final()])
+    result=run_loop(app.state.settings,'文件数是多少',[],None,
+        lambda *args:({'name':'catalog'},[{'version_id':V1}],[]),lambda refs:None,lambda trace:None,
+        lambda *args:next(responses))
+    assert result['failure_reason']=='insufficient_tool_evidence'
+
+
 @pytest.mark.parametrize('name,args,scopes,error', [
     ('approve_application', {}, None, 'tool_not_allowed'),
     ('execute_sql', {'sql': 'SELECT * FROM users'}, None, 'tool_not_allowed'),
@@ -186,7 +200,7 @@ def test_agent_runtime_uses_real_business_tools_and_persists_steps(app, client, 
     _, version = create_dataset(client, owner)
     upload(client, owner, version)
     enable(app, monkeypatch, [tool(args={'version_id': version['id']}), final([version['id']])])
-    response = ask(client, owner)
+    response = ask(client, owner, message='读取版本详情')
     assert response.status_code == 200, response.text
     result = response.json()
     assert result['status'] == 'completed' and result['citations'][0]['asset_count'] == 1

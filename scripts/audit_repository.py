@@ -64,8 +64,17 @@ def local_secrets():
             if not sep or key.strip().startswith('#'):
                 continue
             value = value.strip().strip('\"\'')
+            # Active deployments may keep new service keys in a different protected
+            # directory. Follow only declared credential-file settings; values stay
+            # in memory and never appear in findings or tool output.
+            if key.upper() in {'DP_RETRIEVAL_QDRANT_KEY_FILE', 'DP_RETRIEVAL_ENCODER_KEY_FILE'}:
+                secret_path = Path(value)
+                if secret_path.is_absolute() and secret_path.is_file() and secret_path.stat().st_size <= 1024*1024:
+                    secret_value = secret_path.read_text(encoding='utf-8', errors='replace').strip()
+                    if len(secret_value) >= 8:
+                        values.add(secret_value)
             if not key.upper().endswith('_FILE') and any(
-                term in key.upper() for term in ('PASSWORD', 'SECRET', 'API_KEY', 'ACCESS_KEY')
+                term in key.upper() for term in ('PASSWORD', 'SECRET', 'API_KEY', 'ACCESS_KEY', 'RETRIEVAL_QDRANT_KEY', 'RETRIEVAL_ENCODER_KEY')
             ):
                 if len(value) >= 8:
                     values.add(value)

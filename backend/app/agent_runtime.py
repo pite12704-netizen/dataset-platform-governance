@@ -38,6 +38,8 @@ PROMPT = """你是企业数据集助手。使用提供的只读工具获取事�
 coverage.truncated=true 表示结果不完整；必须说明只查看了返回部分，不能据此断言整体全部通过。
 has_more=true 的检索只是一页，可在调用预算内用 next_offset 获取下一页；目录随时间变化。
 兼容工具 search_datasets 最多返回8个候选，总匹配数未知，不保证遍历整个目录。"""
+PROMPT += "\n目录搜索只提供候选，不能据此回答文件数、许可详情或质量。用户给出版本ID时直接读取该版本，不必先搜索。"
+PROMPT += "涉及质量、准确率或漏检率先调用get_quality；比较版本调用compare_versions；文件数、规模、许可和版本号先调用get_version。用户要求的数字不是证据。"
 
 
 class Answer(Input):
@@ -107,6 +109,9 @@ def model_payload(settings, messages, tools):
     payload = {'model': settings.model_name, 'messages': messages,
                'temperature': 0, 'max_tokens': settings.agent_max_output_tokens}
     if tools:payload.update(tools=tools,tool_choice='auto')
+    if settings.agent_protocol == 'json-schema':
+        from .agent_protocol import request_payload
+        payload = request_payload(payload, tools)
     if len(encoded(payload))>settings.agent_context_bytes:raise AgentStop('context_budget')
     return payload
 
@@ -114,7 +119,11 @@ def model_payload(settings, messages, tools):
 def model_response(settings, messages, tools, remaining):
     payload = model_payload(settings, messages, tools)
     try:
-        return completion(settings, payload, remaining, settings.agent_model_response_bytes)
+        body = completion(settings, payload, remaining, settings.agent_model_response_bytes)
+        if settings.agent_protocol == 'json-schema':
+            from .agent_protocol import normalize_response
+            body = normalize_response(body, tools)
+        return body
     except ModelFailure as exc:
         raise AgentStop(exc.reason, exc.attempts) from None
 
@@ -122,7 +131,11 @@ def model_response(settings, messages, tools, remaining):
 async def async_model_response(settings, messages, tools, remaining):
     payload = model_payload(settings, messages, tools)
     try:
-        return await async_completion(settings, payload, remaining, settings.agent_model_response_bytes)
+        body = await async_completion(settings, payload, remaining, settings.agent_model_response_bytes)
+        if settings.agent_protocol == 'json-schema':
+            from .agent_protocol import normalize_response
+            body = normalize_response(body, tools)
+        return body
     except ModelFailure as exc:
         raise AgentStop(exc.reason, exc.attempts) from None
 
@@ -149,6 +162,8 @@ async def run_loop_async(settings, question, version_ids, scopes, execute, reval
                                               'facts_must_be_rechecked': True}}).decode()}]
     sources, requirements, jobs, quality = {}, list(history_refs or []), [], None
     usage, tokens, started = {}, 0, time.monotonic()
+    repeated_queries = {}
+    successful_tools = set()
 
     async def event(kind, status, step_started, **details):
         trace['steps'].append({'span_id': uid()[:16], 'kind': kind, 'status': status,
@@ -210,6 +225,11 @@ async def run_loop_async(settings, question, version_ids, scopes, execute, reval
                 if not trace['tool_calls'] or any(v not in sources for v in final.version_ids) \
                         or 'http://' in final.answer.lower() or 'https://' in final.answer.lower():
                     raise AgentStop('ungrounded_answer')
+                required = ('get_quality' if any(w in question for w in ('质量','准确率','漏检率')) else
+                            'compare_versions' if any(w in question for w in ('比较','对比')) else
+                            'get_version' if any(w in question for w in ('文件','许可','版本号','规模','读取','详情')) else None)
+                if required and required not in successful_tools:
+                    raise AgentStop('insufficient_tool_evidence')
                 await invoke(revalidate, requirements)
                 sources = {v: sources[v] for v in dict.fromkeys(final.version_ids)}
                 answer, status = final.answer, 'completed'
@@ -237,8 +257,13 @@ async def run_loop_async(settings, question, version_ids, scopes, execute, reval
                     if not isinstance(arguments, str) or len(arguments.encode()) > 2048:
                         raise AgentStop('invalid_arguments')
                     args = TOOL_CONFIG[name][0].model_validate_json(arguments)
+                    signature=hashlib.sha256(encoded([name,args.model_dump()])).hexdigest()
+                    repeated_queries[signature]=repeated_queries.get(signature,0)+1
+                    if repeated_queries[signature]>2:
+                        raise AgentStop('repeated_tool_call')
                     await invoke(revalidate, requirements)
                     payload, citations, refs = await invoke(execute, name, args)
+                    successful_tools.add(name)
                     for citation in citations:
                         if citation.get('version_id'):
                             sources[citation['version_id']] = compact(citation)
@@ -248,7 +273,7 @@ async def run_loop_async(settings, question, version_ids, scopes, execute, reval
                     if name == 'get_quality':
                         quality = compact(payload)
                 except AgentStop as exc:
-                    if exc.reason in {'identity_changed', 'authorization_changed'}:
+                    if exc.reason in {'identity_changed', 'authorization_changed', 'repeated_tool_call'}:
                         raise
                     error = exc.reason
                 except ValidationError:

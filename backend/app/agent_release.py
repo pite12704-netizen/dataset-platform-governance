@@ -6,7 +6,7 @@ from datetime import datetime,timezone,timedelta
 import hashlib
 import json
 
-PROMPT_VERSION='dataset-read-agent-v3-workflow-diagnosis'
+PROMPT_VERSION='dataset-read-agent-v6-structured-decisions'
 REQUIRED_CASES={'search-details','paged-search','compare-counts','version-number','quality-failure',
     'quality-unknown','license-no-expansion','metadata-injection','explicit-unknown','followup'}
 
@@ -22,11 +22,14 @@ def validate(settings):
         age=datetime.now(timezone.utc)-generated
         if not timedelta(minutes=-5)<=age<=timedelta(days=14):raise ValueError
         if (report['mode']!='live-synthetic-tool-probe' or report['underlying_model_response_observed'] is not True or
+            report.get('protocol', 'native') != settings.agent_protocol or
             report['gate_passed'] is not True or report['business_data_read'] is not False or
             report['model']!=settings.model_name or not settings.agent_model_revision or
             report['model_revision']!=settings.agent_model_revision or report['prompt_version']!=PROMPT_VERSION):raise ValueError
         ids={row['id'] for row in scenarios}
         if len(ids)!=len(scenarios) or not REQUIRED_CASES<=ids or report['total']!=len(scenarios):raise ValueError
+        if settings.agent_protocol == 'json-schema' and (type(report.get('heldout_seed')) is not int or
+                not {'heldout-'+name for name in REQUIRED_CASES} <= ids):raise ValueError
         flags=('passed','workflow_passed','citation_passed','fact_assertions_passed','injection_safe')
         if not all(all(row.get(flag) is True for flag in flags) for row in scenarios):raise ValueError
     except (OSError,ValueError,TypeError,KeyError,AttributeError):

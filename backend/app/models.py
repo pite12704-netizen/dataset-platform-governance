@@ -25,6 +25,51 @@ class ControlLock(Identified, Base):
     __tablename__ = "control_locks"
 
 
+class KnowledgeDocument(Identified, Base):
+    """受控知识正文；发布编辑有 revision，引用始终指向确切文档版本。"""
+    __tablename__ = "knowledge_documents"
+    space_id: Mapped[str | None] = col(ForeignKey("spaces.id"), index=True)
+    author_id: Mapped[str] = col(ForeignKey("users.id"))
+    title: Mapped[str] = col(String(200))
+    body: Mapped[str] = col(Text)
+    revision: Mapped[int] = col(Integer, default=1)
+    status: Mapped[str] = col(String(20), default="draft")
+
+
+class RetrievalEntry(Identified, Base):
+    """一条检索单元。正文/来源在 SQL，向量只在外部索引；不保存可下载 URL。"""
+    __tablename__ = "retrieval_entries"
+    __table_args__ = (Index("ix_retrieval_source", "kind", "source_id"),)
+    kind: Mapped[str] = col(String(20), index=True)
+    source_id: Mapped[str] = col(String(32))
+    version_id: Mapped[str | None] = col(String(32), index=True)
+    space_id: Mapped[str | None] = col(String(32), index=True)
+    fingerprint: Mapped[str] = col(String(64))
+    model_revision: Mapped[str] = col(String(128))
+    title: Mapped[str] = col(String(240))
+    section: Mapped[str] = col(String(200), default="")
+    body: Mapped[str] = col(Text, default="")
+    source_revision: Mapped[int] = col(Integer, default=0)
+
+
+class RetrievalEvent(Identified, Base):
+    """小行事务 outbox。generation + lease token 防止旧 Worker 覆盖新修改。"""
+    __tablename__ = "retrieval_events"
+    __table_args__ = (UniqueConstraint("kind", "source_id"),
+                     Index("ix_retrieval_dispatch", "status", "available_at"))
+    kind: Mapped[str] = col(String(20))
+    source_id: Mapped[str] = col(String(32))
+    generation: Mapped[int] = col(Integer, default=1)
+    status: Mapped[str] = col(String(20), default="queued")
+    cursor: Mapped[str] = col(String(32), default="")
+    processed: Mapped[int] = col(Integer, default=0)
+    attempts: Mapped[int] = col(Integer, default=0)
+    available_at: Mapped[datetime] = col(DateTime, default=now)
+    lease_until: Mapped[datetime | None] = col(DateTime)
+    lease_token: Mapped[str | None] = col(String(32))
+    error_code: Mapped[str | None] = col(String(80))
+
+
 class SpaceTransfer(Identified, Base):
     __tablename__ = 'space_transfers'
     space_id: Mapped[str] = col(ForeignKey('spaces.id'),index=True)
@@ -386,6 +431,43 @@ class AgentRun(Identified, Base):
     status: Mapped[str] = col(String(20), default="completed")
     duration_ms: Mapped[int] = col(Integer, default=0)
     request_id: Mapped[str | None] = col(String(64))
+
+
+class AgentGraphWorkflow(Identified, Base):
+    """LangGraph 的执行锁与小型状态；业务确认和授权仍以 AgentAction 为准。"""
+    __tablename__ = "agent_graph_workflows"
+    action_id: Mapped[str] = col(ForeignKey("agent_actions.id"), unique=True)
+    user_id: Mapped[str] = col(ForeignKey("users.id"), index=True)
+    graph_version: Mapped[str] = col(String(80))
+    status: Mapped[str] = col(String(30), default="created")
+    lease_token: Mapped[str | None] = col(String(32))
+    lease_until: Mapped[datetime | None] = col(DateTime)
+    failure_code: Mapped[str | None] = col(String(60))
+
+
+class AgentGraphCheckpoint(Identified, Base):
+    """有界 JSON 检查点；不保存图片清单、文件内容、模型凭据或 pickle。"""
+    __tablename__ = "agent_graph_checkpoints"
+    __table_args__ = (UniqueConstraint("workflow_id", "checkpoint_id", name="uq_agent_graph_checkpoint"),)
+    workflow_id: Mapped[str] = col(ForeignKey("agent_graph_workflows.id"), index=True)
+    checkpoint_id: Mapped[str] = col(String(64))
+    parent_id: Mapped[str | None] = col(String(64))
+    checkpoint: Mapped[dict] = col(JSON)
+    checkpoint_metadata: Mapped[dict] = col(JSON)
+
+
+class AgentGraphWrite(Identified, Base):
+    """节点写入及 interrupt/resume 回执，与检查点分开保留以恢复半途执行。"""
+    __tablename__ = "agent_graph_writes"
+    __table_args__ = (UniqueConstraint("workflow_id", "checkpoint_id", "task_id", "write_index",
+                                      name="uq_agent_graph_write"),)
+    workflow_id: Mapped[str] = col(ForeignKey("agent_graph_workflows.id"), index=True)
+    checkpoint_id: Mapped[str] = col(String(64))
+    task_id: Mapped[str] = col(String(64))
+    task_path: Mapped[str] = col(String(200), default="")
+    write_index: Mapped[int] = col(Integer)
+    channel: Mapped[str] = col(String(100))
+    value: Mapped[dict] = col(JSON)
 
 
 class VisionCheckpoint(Identified, Base):

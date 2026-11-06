@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     s3_max_pool_connections: int = Field(default=40, ge=1, le=128)
     redis_url: str = "redis://localhost:6379/0"
     task_mode: Literal["celery", "inline", "manual"] = "celery"
-    worker_role: Literal["worker", "vision", "mail"] = "worker"
+    worker_role: Literal["worker", "vision", "mail", "retrieval"] = "worker"
     session_hours: int = 12
     cookie_secure: bool = False
     require_admin_mfa: bool = True
@@ -96,6 +96,35 @@ class Settings(BaseSettings):
     model_name: str = ""
     model_api_key: str = ""
     agent_tools_enabled: bool = False
+    agent_protocol: Literal['native', 'json-schema'] = 'native'
+    # 独立于模型自主工具循环；固定业务图仍须人工确认，公开克隆默认保留旧入口。
+    agent_workflow_engine: Literal['legacy', 'langgraph'] = 'legacy'
+    agent_graph_lease_seconds: int = Field(default=120, ge=30, le=300)
+    agent_graph_max_pending: int = Field(default=20, ge=1, le=100)
+    # 检索索引是可重建的派生数据；默认关闭，不影响现有实例。
+    retrieval_enabled: bool = False
+    retrieval_qdrant_url: str = "http://qdrant:6333"
+    retrieval_qdrant_key: str = Field(default="", repr=False)
+    retrieval_qdrant_key_file: Path | None = None
+    retrieval_encoder_url: str = "http://retrieval-encoder:8091"
+    retrieval_encoder_key: str = Field(default="", repr=False)
+    retrieval_encoder_key_file: Path | None = None
+    retrieval_text_model: str = Field(default="bge-m3-local-v1", min_length=1, max_length=128)
+    retrieval_image_model: str = Field(default="chinese-clip-local-v1", min_length=1, max_length=128)
+    retrieval_text_dimensions: int = Field(default=1024, ge=32, le=4096)
+    retrieval_image_dimensions: int = Field(default=512, ge=32, le=4096)
+    retrieval_timeout_seconds: float = Field(default=15, ge=1, le=60)
+    retrieval_index_batch: int = Field(default=8, ge=1, le=32)
+    retrieval_lease_seconds: int = Field(default=180, ge=120, le=900)
+    retrieval_max_attempts: int = Field(default=5, ge=1, le=20)
+    retrieval_scope_limit: int = Field(default=2000, ge=10, le=5000)
+    retrieval_rerank_enabled: bool = False
+    retrieval_lexical_mode: Literal['bm25','keyword'] = 'bm25'
+    retrieval_bm25_max_entries: int = Field(default=5000, ge=100, le=20000)
+    retrieval_bm25_max_bytes: int = Field(default=16*1024**2, ge=1024**2, le=64*1024**2)
+    retrieval_min_text_score: float = Field(default=.35, ge=-1, le=1)
+    retrieval_min_image_score: float = Field(default=0, ge=-1, le=1)
+    retrieval_max_image_bytes: int = Field(default=10*1024**2, ge=1024, le=20*1024**2)
     agent_model_revision: str = Field(default='',max_length=200)
     agent_release_evidence_file: Path | None = None
     agent_release_evidence_sha256: str = Field(default='',pattern=r'^(?:[a-f0-9]{64})?$')
@@ -181,7 +210,7 @@ class Settings(BaseSettings):
     def read_secret_files(cls, data):
         # Docker secrets 保存在挂载文件，密钥不进入镜像或源码。
         data = dict(data)
-        for name in ("secret_key", "session_signing_key", "mfa_encryption_keys", "database_url", "s3_access_key", "s3_secret_key", "redis_url", 'smtp_password'):
+        for name in ("secret_key", "session_signing_key", "mfa_encryption_keys", "database_url", "s3_access_key", "s3_secret_key", "redis_url", 'smtp_password', 'retrieval_qdrant_key', 'retrieval_encoder_key'):
             path = data.get(name + "_file")
             if path:
                 data[name] = Path(path).read_text(encoding="utf-8").strip()
@@ -237,6 +266,8 @@ class Settings(BaseSettings):
             if self.agent_tools_enabled:
                 from .agent_release import validate
                 validate(self)
+            if self.retrieval_enabled and (not self.retrieval_qdrant_key or not self.retrieval_encoder_key):
+                raise ValueError('生产检索服务必须配置独立服务认证密钥')
         return self
 
 

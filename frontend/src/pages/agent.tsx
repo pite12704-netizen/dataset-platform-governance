@@ -7,9 +7,10 @@ import { api, bytes, date, labels, post, Row } from '../api';
 import { PageTitle, Status } from './data';
 import { appendResult, ChatRequest, keepPending, newChatRequest, readPending, savePending } from '../agent-request';
 import '../agent.css';
-import {WorkflowPlan,AgentTaskProgress} from '../agent-workflow';
+import {WorkflowPlan,AgentTaskProgress,RecoverableWorkflow} from '../agent-workflow';
 
 const intents = [
+  {value:'knowledge',label:'平台知识问答'}, {value:'semantic_search',label:'语义找数据集'},
   { value: 'auto', label: '自动识别' }, { value: 'agent', label: 'Agent 综合查询' }, { value: 'search', label: '找数据' },
   { value: 'compare', label: '版本对比' }, { value: 'quality', label: '解读质量' },
   { value: 'application', label: '起草申请' }, { value: 'jobs', label: '查询任务' },
@@ -40,7 +41,7 @@ export function AgentPage() {
   const [confirming, setConfirming] = useState(false);
   const [plan, setPlan] = useState<Row>();
   const [tracking,setTracking]=useState<string>();
-  useEffect(()=>{if(!tracking){const recent=actions.find(a=>a.status==='completed'&&['vision','dedup'].includes(a.kind)&&a.result?.job_id);if(recent)setTracking(recent.id);}},[actions,tracking]);
+  useEffect(()=>{if(!tracking){const recent=actions.find(a=>a.status==='completed'&&a.result?.job_id&&(['vision','dedup'].includes(a.kind)||a.orchestration?.engine==='langgraph'));if(recent)setTracking(recent.id);}},[actions,tracking]);
   const messageList = useRef<HTMLDivElement>(null);
   const sending = useRef(false);
   const account = useRef<string | undefined>(undefined);
@@ -146,9 +147,19 @@ export function AgentPage() {
       if (conversation) await loadConversation(conversation);
     } catch (e: any) { message.error(e.message); } finally { setConfirming(false); }
   };
+  const recovered = (next:Row) => {
+    if(next.result?.job_id)setTracking(next.id);
+    if(plan?.id===next.id)setPlan(next.status==='pending'?next:undefined);
+    void refresh().catch(e=>message.warning(e.message));
+  };
 
   const renderResult = (h: Row) => <>
     <p className="agent-answer-text">{h.answer}</p>
+    {h.query_memory && <details><summary>本轮自动记住的需求</summary><p>{h.query_memory.effective_query}</p>
+      <p>模态：{h.query_memory.modality || '不限'}；排除：{h.query_memory.excluded_modalities?.join('、') || '无'}；已折叠 {h.query_memory.turns_folded} 轮用户要求。</p>
+      <small>只保存当前对话的需求摘要；权限和数据状态每次重新查询。可以直接说“重新找……”清空原条件。</small></details>}
+    {!!h.knowledge_citations?.length && <Card size="small" title="知识来源">{h.knowledge_citations.map((c:Row,i:number)=><p key={c.entry_id}>
+      <Link to={c.url}>[{i+1}] {c.name} · {c.section} · 修订 {c.revision}</Link></p>)}</Card>}
     {!!h.execution?.steps?.length && <Card size="small" title="本次查询过程" className="agent-result-card">
       <Space wrap><Tag>{h.execution.rounds} 轮模型调用</Tag><Tag>{h.execution.tool_calls} 次工具调用</Tag>
         <Tag>{h.execution.stop_reason === 'completed' ? '完成' : '已停止'}</Tag>
@@ -162,6 +173,7 @@ export function AgentPage() {
     {!!h.citations?.length && <div className="agent-citations">{h.citations.map((c: Row) => <div className="agent-citation" key={c.version_id || c.dataset_id}>
       <Link to={c.url || `/datasets/${c.dataset_id}`}><strong>{c.name}</strong> {c.number ? `v${c.number}` : '草稿'} <ArrowRightOutlined /></Link>
       <span>{labels[c.modality] || ''} · {labels[c.access_mode]}{c.license && ` · ${c.license}`}</span>
+      {c.content_evidence && <Tag color="green">同一目标已复核标签匹配 {c.matched_images} 张图片</Tag>}
       {c.version_id && <Space wrap><Button size="small" onClick={() => {
         addChoices([{ id: c.version_id, number: c.number, name: c.name }]);
         setVersions(old => old.includes(c.version_id) ? old : [...old.slice(-3), c.version_id]);
@@ -227,7 +239,7 @@ export function AgentPage() {
           {!conversations.length && <p className="muted">发送消息后自动保存</p>}
           {conversations.map(c => <button key={c.id} disabled={busy} className={`agent-session ${conversation === c.id ? 'active' : ''}`} onClick={() => loadConversation(c.id)}><strong>{c.title}</strong><small>{date(c.updated_at)}</small></button>)}
           {conversation&&<Popconfirm title="清除当前对话内容及未确认草稿？" description="已执行任务、审批和去重回执保留；不会重复执行。" onConfirm={async()=>{try{await post(`/agent/conversations/${conversation}/clear`);setHistory([]);setPins([]);setVersions([]);setRequest();await refresh();message.success('对话内容已清除');}catch(e:any){message.error(e.message);}}}><Button danger disabled={busy}>清除当前对话内容</Button></Popconfirm>}
-          {conversation&&pins.length>0&&<div><strong>固定的上下文线索</strong>{pins.map(pin=><p key={pin.id}>{pin.outputs.redacted?'权限已变化':pin.inputs.message?.slice(0,40)} <Button size="small" onClick={async()=>{try{await post(`/agent/conversations/${conversation}/runs/${pin.id}/pin`,{pinned:false});setPins(old=>old.filter(row=>row.id!==pin.id));setHistory(old=>old.map(row=>row.run_id===pin.id?{...row,memory_pinned:false}:row));}catch(e:any){message.error(e.message);}}}>取消</Button></p>)}</div>}
+          {conversation&&pins.length>0&&<div><strong>收藏的结果</strong>{pins.map(pin=><p key={pin.id}>{pin.outputs.redacted?'权限已变化':pin.inputs.message?.slice(0,40)} <Button size="small" onClick={async()=>{try{await post(`/agent/conversations/${conversation}/runs/${pin.id}/pin`,{pinned:false});setPins(old=>old.filter(row=>row.id!==pin.id));setHistory(old=>old.map(row=>row.run_id===pin.id?{...row,memory_pinned:false}:row));}catch(e:any){message.error(e.message);}}}>取消</Button></p>)}</div>}
           <div className="agent-capability-note"><RobotOutlined /><p>先选版本，再解读、对比或加工。</p><p>申请与处理任务会先展示预览，确认后执行。</p><p>无模型时可使用关键词检索和全部业务工具。</p></div>
         </Card>
         <Card className="agent-chat-panel">
@@ -236,14 +248,15 @@ export function AgentPage() {
             <Select aria-label="选择数据集" placeholder="先选择数据集加载版本" disabled={busy} showSearch optionFilterProp="label" value={undefined} onChange={chooseDataset} options={catalog.map(d => ({ value: d.id, label: d.name }))} />
             <Select aria-label="选择版本" mode="multiple" maxCount={4} disabled={busy} placeholder="选择 1 个版本操作，2–4 个版本对比" value={versions} onChange={setVersions} showSearch optionFilterProp="label" options={choices.map(v => ({ value: v.id, label: `${v.name} · v${v.number}` }))} />
           </div></div>
-          {tracking&&<AgentTaskProgress actionId={tracking}/>}
+          {tracking&&<AgentTaskProgress actionId={tracking} workflow={actions.some(a=>a.id===tracking&&a.orchestration?.engine==='langgraph')} onWorkflowUpdate={refresh}/>}
           <div className="agent-messages" aria-live="polite" ref={messageList}>
             {!history.length && <div className="assistant-welcome agent-welcome"><div className="assistant-logo"><RobotOutlined /></div><h2>从数据需求，到下一步行动</h2><p>在当前权限内检索资料，用具体版本支持每一次判断。</p><div className="prompt-grid">{[
+              ['knowledge','平台知识：独立复核与发布审核有什么区别？'], ['semantic_search','查找适合行人检测的图像数据集'],
               ['search', '有哪些可申请的数据集？'], ['compare', '对比所选数据版本'], ['quality', '解读所选版本的质量报告'],
               ['application', '帮我起草数据使用申请'], ['jobs', '查看我的任务进度'], ['quality_job', '为所选版本运行质量检查'],
               ['diagnose','这个版本下一步做什么？'],['vision','为所选版本安排图像识别'],['dedup','为所选版本发起重复检测'],
             ].map(([mode, text]) => <button disabled={busy || !cap || !!pending} key={mode} onClick={() => send(text, mode)}>{text}<ArrowRightOutlined /></button>)}</div></div>}
-            {history.map((h, i) => <div className="chat-turn" key={h.run_id || i}><div className="question">{h.question}</div>{conversation&&h.run_id&&!h.draft&&!h.redacted&&(!h.source||h.source==='assistant')&&(!h.tool||['agent','search','compare','quality','jobs'].includes(h.tool))&&['completed','degraded'].includes(h.status)&&<Button size="small" disabled={busy} onClick={async()=>{try{await post(`/agent/conversations/${conversation}/runs/${h.run_id}/pin`,{pinned:!h.memory_pinned});setHistory(old=>old.map(row=>row.run_id===h.run_id?{...row,memory_pinned:!h.memory_pinned}:row));setPins(await api(`/agent/conversations/${conversation}/pins`));}catch(e:any){message.error(e.message);}}}>{h.memory_pinned?'取消固定线索':'固定上下文线索'}</Button>}<div className="answer"><RobotOutlined /><div className="agent-answer-body">{renderResult(h)}</div></div></div>)}
+            {history.map((h, i) => <div className="chat-turn" key={h.run_id || i}><div className="question">{h.question}</div>{conversation&&h.run_id&&!h.draft&&!h.redacted&&(!h.source||h.source==='assistant')&&(['agent','search','compare','quality','jobs','knowledge','semantic_search'].includes(h.tool))&&['completed','degraded'].includes(h.status)&&<Button size="small" disabled={busy} onClick={async()=>{try{await post(`/agent/conversations/${conversation}/runs/${h.run_id}/pin`,{pinned:!h.memory_pinned});setHistory(old=>old.map(row=>row.run_id===h.run_id?{...row,memory_pinned:!h.memory_pinned}:row));setPins(await api(`/agent/conversations/${conversation}/pins`));}catch(e:any){message.error(e.message);}}}>{h.memory_pinned?'取消收藏':'收藏结果'}</Button>}<div className="answer"><RobotOutlined /><div className="agent-answer-body">{renderResult(h)}</div></div></div>)}
             {busy && <div className="agent-thinking"><Spin size="small" /> 正在读取平台数据…</div>}
           </div>
           <div className="agent-composer"><Select aria-label="助手操作类型" value={intent} options={intents.filter(i => i.value !== 'agent' || cap?.agent_tools_enabled)} onChange={setIntent} disabled={busy} />
@@ -260,7 +273,7 @@ export function AgentPage() {
           { title: '状态', dataIndex: 'status', render: x => <Tag>{actionStatus[x] || x}</Tag> },
           { title: '准备时间', dataIndex: 'created_at', render: date },
           { title: '操作', render: (_: any, r: Row) => r.status === 'pending' ? <Space><Button onClick={() => setPlan(r)}>查看并确认</Button><Button danger onClick={() => cancel(r.id)} loading={confirming}>取消</Button></Space> : r.result.url ? <Link to={r.result.url}>查看结果</Link> : '—' },
-        ]} />
+        ]} expandable={{rowExpandable:r=>!!r.orchestration,expandedRowRender:r=><RecoverableWorkflow action={r} onRecovered={recovered}/>}} />
       </Card> },
       { key: 'runs', label: '运行追踪', children: <Card title="我的 Agent 调用" extra={<Button icon={<ReloadOutlined />} onClick={() => refresh().catch(e => message.error(e.message))}>刷新</Button>}><Table rowKey="id" dataSource={runs} columns={[
         { title: '工具', dataIndex: 'tool', render: x => intents.find(i => i.value === x)?.label || actionLabels[x] || x },
@@ -286,7 +299,7 @@ export function AgentPage() {
         ...(plan.kind === 'application' ? [{ key: 'purpose', label: '申请用途', children: plan.payload.purpose }, { key: 'duration', label: '申请期限', children: `${plan.payload.duration_days} 天` }] : []),
         ...(plan.payload.target_format ? [{ key: 'format', label: '目标格式', children: plan.payload.target_format.toUpperCase() }] : []),
         { key: 'expires', label: '确认有效期至', children: date(plan.expires_at) },
-      ]} />{plan.summary.workflow&&<WorkflowPlan value={plan.summary.workflow}/>}<Button danger disabled={confirming} onClick={() => cancel(plan.id)}>取消此操作</Button></>}
+      ]} />{plan.summary.workflow&&<WorkflowPlan value={plan.summary.workflow}/>}<RecoverableWorkflow action={plan} onRecovered={recovered}/><Button danger disabled={confirming} onClick={() => cancel(plan.id)}>取消此操作</Button></>}
     </Modal>
   </>;
 }

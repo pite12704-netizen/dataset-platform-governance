@@ -30,6 +30,7 @@ from app.db import Base, Database, now
 from app.storage import make_storage
 
 MAGIC = b"DPBACKUP1"
+GRAPH_TABLES = {'agent_graph_workflows', 'agent_graph_checkpoints', 'agent_graph_writes'}
 
 
 def encode(value):
@@ -62,7 +63,7 @@ def upgrade_manifest(manifest):
     """Verify the original manifest, then add deterministic defaults introduced after v1."""
     if hashlib.sha256(canonical(manifest["tables"])).hexdigest() != manifest["metadata_sha256"]:
         raise RuntimeError("Metadata checksum failed")
-    if manifest['schema_version'] in {1, 2, 3, 4, 5, 6, 7, 8,9,10}:
+    if manifest['schema_version'] in {1, 2, 3, 4, 5, 6, 7, 8,9,10,12}:
         # Supported historical MySQL snapshots use reflected TINYINT columns.
         # Verify original bytes first, then normalize only declared Boolean fields.
         # This also covers e63/v8, not only the first reflected v3 release.
@@ -143,7 +144,15 @@ def upgrade_manifest(manifest):
     if manifest['schema_version']==10:
         manifest['tables'].setdefault('duplicate_pair_reviews',[])
         manifest['schema_version']=11
-    if manifest["schema_version"] != 11:
+    if manifest['schema_version']==11:
+        for name in ('knowledge_documents','retrieval_entries','retrieval_events'):
+            manifest['tables'].setdefault(name,[])
+        manifest['schema_version']=12
+    if manifest['schema_version'] == 12:
+        for name in GRAPH_TABLES:
+            manifest['tables'].setdefault(name, [])
+        manifest['schema_version'] = 13
+    if manifest["schema_version"] != 13:
         raise RuntimeError("Unsupported backup schema version")
     # Restore must not resurrect sessions, used recovery codes or reset links from an old backup.
     for row in manifest['tables'].get('login_sessions',[]):row['revoked']=True
@@ -166,6 +175,20 @@ def upgrade_manifest(manifest):
     for row in manifest['tables'].get('mail_outbox',[]):row.update(delivery_token=None,lease_until=None,next_attempt_at=None)
     for row in manifest['tables'].get('space_transfers',[]):
         if row['status']=='pending':row.update(status='cancelled',decided_at=now())
+    # Recovery preserves business receipts but never resurrects an old graph approval.
+    graph_actions = {row['action_id'] for row in manifest['tables'].get('agent_graph_workflows', [])}
+    for row in manifest['tables'].get('agent_graph_workflows', []):
+        row.update(status='invalidated', lease_token=None, lease_until=None, failure_code='restore_invalidated')
+    for row in manifest['tables'].get('agent_actions', []):
+        if row['id'] in graph_actions and row['status'] == 'pending':
+            row['status'] = 'cancelled'
+    manifest['tables']['agent_graph_checkpoints'] = []
+    manifest['tables']['agent_graph_writes'] = []
+    # 向量库为可重建派生索引，不依赖另一个时间点的快照；恢复后重放事务事件。
+    manifest['tables']['retrieval_entries']=[]
+    for row in manifest['tables'].get('retrieval_events',[]):
+        row.update(status='maintenance' if row['kind']=='gc' else 'queued',lease_token=None,
+                   lease_until=None,attempts=0,cursor='',processed=0,available_at=now(),error_code=None)
     from app.job_payloads import validate_backup_payloads
     validate_backup_payloads(manifest['tables'])
     from app.joint_review import validate_backup
@@ -194,24 +217,28 @@ def snapshot(database,legacy_schema=False):
         with conn.begin():
             tables = {}
             source_tables=Base.metadata.sorted_tables
-            known_legacy={'f2b8d527c4e3','a6c9e341d508','b9e81a7302fd','c41f8d29a705','d52a0f18b906','e63b2a09c817','f74c3d10e928','a85d4e21fa39'}
+            known_legacy={'f2b8d527c4e3','a6c9e341d508','b9e81a7302fd','c41f8d29a705','d52a0f18b906','e63b2a09c817','f74c3d10e928','a85d4e21fa39','c63f8a29d105','d91e7a62b430'}
             if 'alembic_version' in inspect(conn).get_table_names():
                 actual_revision=conn.scalar(text('SELECT version_num FROM alembic_version'))
                 if actual_revision in known_legacy:legacy_schema=True
-                elif actual_revision!='c63f8a29d105':raise RuntimeError('Unsupported source schema; refusing incomplete backup')
+                elif actual_revision!='e24b7c91d602':raise RuntimeError('Unsupported source schema; refusing incomplete backup')
             if legacy_schema:
                 revision=conn.scalar(text('SELECT version_num FROM alembic_version'))
                 legacy_revision = revision
                 if revision not in known_legacy:
                     raise RuntimeError('Legacy backup only supports explicitly identified previous releases')
                 names=set(inspect(conn).get_table_names())-{'alembic_version'}
-                excluded = {'duplicate_pair_reviews'}
-                if revision!='a85d4e21fa39':excluded.add('job_payloads')
-                if revision not in {'f74c3d10e928','a85d4e21fa39'}:excluded|={'control_locks','space_transfers'}
-                if revision not in {'e63b2a09c817','f74c3d10e928','a85d4e21fa39'}:excluded|={'thumbnails','evaluation_sets'}
-                if revision not in {'b9e81a7302fd','c41f8d29a705','d52a0f18b906','e63b2a09c817','f74c3d10e928','a85d4e21fa39'}:excluded|={'import_batches','import_items'}
+                excluded = {'knowledge_documents','retrieval_entries','retrieval_events'}
+                if revision!='c63f8a29d105':excluded.add('duplicate_pair_reviews')
+                if revision not in {'a85d4e21fa39','c63f8a29d105'}:excluded.add('job_payloads')
+                if revision not in {'f74c3d10e928','a85d4e21fa39','c63f8a29d105'}:excluded|={'control_locks','space_transfers'}
+                if revision not in {'e63b2a09c817','f74c3d10e928','a85d4e21fa39','c63f8a29d105'}:excluded|={'thumbnails','evaluation_sets'}
+                if revision not in {'b9e81a7302fd','c41f8d29a705','d52a0f18b906','e63b2a09c817','f74c3d10e928','a85d4e21fa39','c63f8a29d105'}:excluded|={'import_batches','import_items'}
                 if revision=='f2b8d527c4e3':
                     excluded |= {'image_review_images','image_review_image_events','vision_checkpoints','governance_reports'}
+                if revision == 'd91e7a62b430':
+                    excluded = set()
+                excluded |= GRAPH_TABLES
                 expected=set(Base.metadata.tables)-excluded
                 if names!=expected:raise RuntimeError('Unexpected legacy tables; refusing partial backup')
                 metadata=MetaData()
@@ -236,6 +263,9 @@ def snapshot(database,legacy_schema=False):
     if any(r['status']=='running' and r['created_at']>now()-timedelta(minutes=10)
            for r in tables.get('agent_runs',[])):
         raise RuntimeError('Active Agent queries remain; drain requests before snapshot')
+    if any(row.get('lease_token') and row.get('lease_until') and row['lease_until'] > now()
+           for row in tables.get('agent_graph_workflows', [])):
+        raise RuntimeError('Active LangGraph execution remains; drain requests before snapshot')
     objects = {}
     for row in tables["assets"]:
         objects[row["object_key"]] = {"key": row["object_key"], "size": row["size"], "sha256": row["sha256"]}
@@ -256,7 +286,7 @@ def snapshot(database,legacy_schema=False):
     if legacy_revision == 'f2b8d527c4e3':
         for row in tables.get('agent_conversations',[]):
             row.pop('active_run_id',None);row.pop('active_until',None)
-    schema_version = 3 if legacy_revision == 'f2b8d527c4e3' else 4 if legacy_revision == 'a6c9e341d508' else 5 if legacy_revision == 'b9e81a7302fd' else 6 if legacy_revision=='c41f8d29a705' else 7 if legacy_revision=='d52a0f18b906' else 8 if legacy_revision=='e63b2a09c817' else 9 if legacy_revision=='f74c3d10e928' else 10 if legacy_revision=='a85d4e21fa39' else 11
+    schema_version = 3 if legacy_revision == 'f2b8d527c4e3' else 4 if legacy_revision == 'a6c9e341d508' else 5 if legacy_revision == 'b9e81a7302fd' else 6 if legacy_revision=='c41f8d29a705' else 7 if legacy_revision=='d52a0f18b906' else 8 if legacy_revision=='e63b2a09c817' else 9 if legacy_revision=='f74c3d10e928' else 10 if legacy_revision=='a85d4e21fa39' else 11 if legacy_revision=='c63f8a29d105' else 12 if legacy_revision=='d91e7a62b430' else 13
     return {"schema_version": schema_version, "created_at": now().isoformat() + "Z", "tables": tables,
             'mfa_key_ids':list(database.mfa_key_ids),
             "objects": list(objects.values()), "metadata_sha256": hashlib.sha256(canonical(tables)).hexdigest()}

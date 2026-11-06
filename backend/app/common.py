@@ -27,7 +27,7 @@ def public_row(obj, exclude=()):
     if isinstance(obj,Job):
         from .job_payloads import public_hydrate
         public_hydrate(obj)
-    hidden = {"password_hash", "mfa_secret", "mfa_last_counter", "mfa_recovery_hashes", "token_hash", "object_key", "storage_upload_id", "dispatch_token", "delivery_token", "finalize_token"}
+    hidden = {"password_hash", "mfa_secret", "mfa_last_counter", "mfa_recovery_hashes", "token_hash", "object_key", "storage_upload_id", "dispatch_token", "delivery_token", "finalize_token", "lease_token"}
     return {c.name: getattr(obj, c.name) for c in obj.__table__.columns if c.name not in hidden | set(exclude)}
 
 

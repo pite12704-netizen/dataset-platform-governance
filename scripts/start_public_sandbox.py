@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'backend'));sys.path.insert(0,str(ROOT))
 
-def prepare(root=ROOT,port=18080):
+def prepare(root=ROOT,port=18080,workflow_engine='legacy'):
     if not 1024<=port<=65535:raise ValueError('Port must be 1024..65535')
     directory=Path(root)/'var/sandboxes'/('sandbox-'+uuid.uuid4().hex);directory.mkdir(parents=True,exist_ok=False)
     from app.config import Settings
@@ -12,6 +12,7 @@ def prepare(root=ROOT,port=18080):
         secret_key=secrets.token_hex(32),database_url='sqlite:///'+str(directory/'metadata.db'),
         storage_backend='local',storage_root=directory/'objects',task_mode='inline',scan_mode='development',
         model_url='',model_name='',vision_model_url='',vision_model_name='',vision_enabled=False,agent_tools_enabled=False,
+        agent_workflow_engine=workflow_engine,
         smtp_host='',oidc_issuer='',registration_mode='open',require_verification=False,require_admin_mfa=False,
         public_url=f'http://127.0.0.1:{port}',frontend_url=f'http://127.0.0.1:{port}',cookie_secure=False,
         mail_spool=directory/'mail',redis_url='redis://127.0.0.1:1/0')
@@ -36,9 +37,11 @@ def prepare(root=ROOT,port=18080):
     return cfg,directory
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--port',type=int,default=18080);p.add_argument('--prepare-only',action='store_true');a=p.parse_args()
-    cfg,directory=prepare(port=a.port)
-    print(json.dumps({'isolated':True,'production':False,'directory':str(directory),'url':cfg.public_url,'models_enabled':False}),flush=True)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--port',type=int,default=18080);p.add_argument('--prepare-only',action='store_true')
+    p.add_argument('--langgraph',action='store_true',help='Enable durable human-confirmed LangGraph workflows in this fresh sandbox')
+    a=p.parse_args()
+    cfg,directory=prepare(port=a.port,workflow_engine='langgraph' if a.langgraph else 'legacy')
+    print(json.dumps({'isolated':True,'production':False,'directory':str(directory),'url':cfg.public_url,'models_enabled':False,'workflow_engine':cfg.agent_workflow_engine}),flush=True)
     if a.prepare_only:return
     dist=ROOT/'frontend/dist'
     if not (dist/'index.html').is_file():raise RuntimeError('Build frontend first: npm --prefix frontend run build')

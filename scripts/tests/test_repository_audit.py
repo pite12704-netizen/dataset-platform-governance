@@ -43,3 +43,21 @@ def test_staged_audit_catches_credential_removed_only_from_worktree(tmp_path, mo
     assert not report['passed']
     assert report['findings'][0]['reason'] == 'credential_pattern'
     assert secret not in json.dumps(report)
+
+
+def test_active_retrieval_key_files_outside_old_secret_directory_are_scanned(tmp_path, monkeypatch):
+    monkeypatch.setattr(audit, 'ROOT', tmp_path)
+    runtime = tmp_path / 'var/run'
+    runtime.mkdir(parents=True)
+    protected = tmp_path / 'external-service-config'
+    protected.mkdir()
+    value = 'synthetic-' + 'retrieval-service-key-0123456789'
+    keyfile = protected / 'encoder-auth'
+    keyfile.write_text(value, encoding='utf-8')
+    host = protected / 'host.env.local'
+    host.write_text('DP_RETRIEVAL_ENCODER_KEY_FILE='+str(keyfile)+'\n', encoding='utf-8')
+    (runtime / 'active-deployment.json').write_text(json.dumps({'host_env': str(host)}), encoding='utf-8')
+    values = audit.local_secrets()
+    assert value in values and str(keyfile) not in values
+    findings = audit.findings_for('candidate.py', value, values)
+    assert findings and value not in json.dumps(findings)

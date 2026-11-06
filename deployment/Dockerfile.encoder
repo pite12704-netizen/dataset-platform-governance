@@ -1,0 +1,9 @@
+ARG ENCODER_BASE_IMAGE=python@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+FROM ${ENCODER_BASE_IMAGE}
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HOME=/tmp/hf
+COPY services/retrieval_encoder/requirements.lock /app/services/retrieval_encoder/requirements.lock
+RUN pip install --no-cache-dir --only-binary=:all: --require-hashes -r services/retrieval_encoder/requirements.lock
+COPY services/retrieval_encoder/server.py /app/services/retrieval_encoder/server.py
+USER 10001:10001
+CMD ["uvicorn", "services.retrieval_encoder.server:app", "--host", "0.0.0.0", "--port", "8091", "--workers", "1", "--limit-concurrency", "8", "--no-access-log"]

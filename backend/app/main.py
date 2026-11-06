@@ -95,6 +95,7 @@ def create_app(settings: Settings | None = None, initialize=False):
     app.state.download_limiter = CapacityLimiter(settings.download_max_inflight)
     app.state.media_limiter = CapacityLimiter(settings.media_max_inflight)
     app.state.agent_status_limiter=CapacityLimiter(settings.agent_status_max_inflight)
+    app.state.retrieval_limiter = CapacityLimiter(2)
     app.state.agent_status_owners={}
     from .preview_cache import ThumbnailCache
     app.state.preview_cache=ThumbnailCache(settings.preview_cache_bytes,settings.preview_cache_ttl_seconds)
@@ -176,6 +177,10 @@ def create_app(settings: Settings | None = None, initialize=False):
     app.include_router(assistant.router)
     from . import agent_streams
     app.include_router(agent_streams.router)
+    from . import agent_graph_api
+    app.include_router(agent_graph_api.router)
+    from . import retrieval
+    app.include_router(retrieval.router, prefix="/api/v1")
     from . import image_completeness
     app.include_router(image_completeness.router)
     from . import governance

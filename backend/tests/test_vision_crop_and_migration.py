@@ -34,5 +34,5 @@ def test_known_legacy_snapshots_reflect_actual_columns(tmp_path,revision,format_
         manifest=snapshot(db)
         assert manifest['schema_version']==format_version
         restored=upgrade_manifest(manifest)
-        assert restored['schema_version']==11 and 'thumbnails' in restored['tables'] and 'job_payloads' in restored['tables']
+        assert restored['schema_version']==13 and 'thumbnails' in restored['tables'] and 'job_payloads' in restored['tables']
     finally:db.engine.dispose()

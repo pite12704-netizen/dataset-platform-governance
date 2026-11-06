@@ -1,0 +1,9 @@
+# Optional inference environment; deliberately separate from the lightweight business API.
+# Resolve and lock with hashes for your deployment; no model weights are bundled.
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+torch>=2.15,<3
+transformers>=5.22.1,<6
+sentence-transformers>=6.2,<7
+pillow>=13,<14
+safetensors>=0.8,<1
